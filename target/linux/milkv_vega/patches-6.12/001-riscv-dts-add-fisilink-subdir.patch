@@ -1,0 +1,10 @@
+--- a/arch/riscv/boot/dts/Makefile
++++ b/arch/riscv/boot/dts/Makefile
+@@ -3,6 +3,7 @@ subdir-y += allwinner
+ subdir-y += canaan
+ subdir-y += microchip
+ subdir-y += renesas
++subdir-y += fisilink
+ subdir-y += sifive
+ subdir-y += sophgo
+ subdir-y += spacemit

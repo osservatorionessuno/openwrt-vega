@@ -1,0 +1,18 @@
+From: Milk-V Vega OpenWrt port
+Subject: [PATCH] riscv: disable ASID allocator on Nuclei UX608
+
+UX608's SATP retains ASID-field writes but the TLB does not honour
+ASIDs in matching, so the allocator causes stale TLB hits across MM
+switches. Force the probe to report 0 ASID bits.
+
+--- a/arch/riscv/mm/context.c
++++ b/arch/riscv/mm/context.c
+@@ -234,6 +234,8 @@ static int __init asids_init(void)
+ 	csr_write(CSR_SATP, asid_bits);
+ 	asid_bits = (csr_read(CSR_SATP) >> SATP_ASID_SHIFT)  & SATP_ASID_MASK;
+ 	asid_bits = fls_long(asid_bits);
++	/* UX608 reports nonzero ASID width but TLB ignores ASIDs. */
++	asid_bits = 0;
+ 	csr_write(CSR_SATP, old);
+
+ 	/*

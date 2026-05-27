@@ -1,0 +1,331 @@
+// SPDX-License-Identifier: (GPL-2.0 OR MIT)
+/* Copyright (c) 2020 Nuclei System Technologies */
+
+/* Clock frequency (in Hz) of the PCB crystal for rtcclk */
+/*#define RTCCLK_FREQ		32768*/
+
+/dts-v1/;
+
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+	compatible = "milkv,vega", "fisilink,fsl91030m";
+	model = "Milk-V Vega";
+
+	chosen {
+		bootargs = "earlycon=sbi console=ttySIF0,115200 no4lvl no5lvl ubi.mtd=ubifs_nand root=ubi0:rootfs rootfstype=ubifs rootwait rw";
+		stdout-path = "serial0";
+	};
+
+	aliases {
+		serial0 = &uart0;
+		serial1 = &uart1;
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <48828>;
+		
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			reg = <0>;
+			status = "okay";
+			compatible = "riscv";
+			/*
+			 * Linux 6.6+ deprecated the single "riscv,isa" string
+			 * and parses isa-base + isa-extensions instead.
+			 * Keep "riscv,isa" for U-Boot/older consumers.
+			 */
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
+					       "zicsr", "zifencei";
+			riscv,satp-mode = "sv39";	/* force Sv39 (6.5+ supported) */
+			mmu-type = "riscv,sv39";
+			clock-frequency = <400000000>;
+		
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+			};
+		};
+	};
+
+	memory@41000000 {
+		device_type = "memory";
+		reg = <0x0 0x41000000 0x0 0xf000000>;
+	};
+
+	soc {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		compatible = "nuclei,ux600fd", "simple-bus";
+		ranges;
+	};
+
+	hfclk: hfclk {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock-frequency = <200000000>;
+		clock-output-names = "hfclk";
+	};
+ 
+ 	hfclk2: hfclk2 {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock-frequency = <100000000>;
+		clock-output-names = "hfclk2";
+	};
+
+	console {
+		compatible = "sbi,console";
+	};
+
+	plic0: interrupt-controller@8000000 {
+		#interrupt-cells = <1>;
+		compatible = "riscv,plic0";
+		interrupt-controller;
+		riscv,ndev = <53>;
+		interrupts-extended =
+		<&cpu0_intc 11 &cpu0_intc 9>;
+		reg = <0x0 0x8000000 0x0 0x4000000>;
+	};
+
+	/*
+	 * Split ACLINT description of the Nuclei timer block (CLINT-
+	 * compatible part starts at +0x1000). The "riscv,aclint-mswi"
+	 * and "riscv,aclint-mtimer" compatibles let OpenSBI's FDT
+	 * driver take sizes from DT reg (instead of the sifive,clint0
+	 * path which hardcodes the 16 KiB MSWI / 32 KiB mtimecmp
+	 * sizes that fragment the PMP map on this 8-PMP-entry SoC).
+	 *
+	 * Linux and U-Boot here use SBI for timer/IPI, so they don't
+	 * care whether we describe it as CLINT or split ACLINT.
+	 */
+	mswi: mswi@2001000 {
+		compatible = "riscv,aclint-mswi";
+		reg = <0x0 0x02001000 0x0 0x1000>;
+		interrupts-extended = <&cpu0_intc 3>;
+	};
+
+	mtimer: mtimer@2005000 {
+		compatible = "riscv,aclint-mtimer";
+		reg = <0x0 0x02005000 0x0 0x8>,     /* mtimecmp */
+		      <0x0 0x0200cff8 0x0 0x8>;     /* mtime */
+		reg-names = "mtimecmp", "mtime";
+		interrupts-extended = <&cpu0_intc 7>;
+	};
+
+	syscon: syscon@2000000 {
+		compatible = "syscon", "simple-mfd";
+		reg = <0x0 0x02000000 0x0 0x1000>;
+	};
+
+	reboot {
+		compatible = "syscon-reboot";
+		regmap = <&syscon>;
+		offset = <0xff0>;
+		mask = <0xffffffff>;
+		value = <0x80000a5f>;
+	};
+
+	poweroff {
+		compatible = "syscon-poweroff";
+		regmap = <&syscon>;
+		offset = <0xff0>;
+		mask = <0xffffffff>;
+		value = <0x80000a5f>;
+	};
+
+	uart0: serial@10013000 {
+		compatible = "sifive,uart0";
+		reg = <0x0 0x10013000 0x0 0x1000>;
+		interrupt-parent = <&plic0>;
+		interrupts = <2>;
+		clocks = <&hfclk2>;
+		clock-frequency = <100000000>;
+		current-speed = <115200>;
+		status = "okay";
+	};
+
+	uart1: serial@10012000 {
+		compatible = "sifive,uart0";
+		reg = <0x0 0x10012000 0x0 0x1000>;
+		interrupt-parent = <&plic0>;
+		interrupts = <3>;
+		clocks = <&hfclk2>;
+		status = "disabled";
+	};
+  
+	qspi0: spi@10014000 {
+		compatible = "sifive,spi0";
+		reg = <0x0 0x10014000 0x0 0x1000>;
+		interrupt-parent = <&plic0>;
+		interrupts = <5>;
+		clocks = <&hfclk2>;
+		num-cs = <1>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		sifive,fifo-depth = <4>;
+		status = "okay";
+
+		flash@1 {
+			compatible = "jedec,spi-nor";
+			reg = <1>;
+			spi-tx-bus-width = <1>;
+			spi-rx-bus-width = <1>;
+			spi-max-frequency = <50000000>;
+
+			partitions {
+				compatible = "fixed-partitions";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				partition@0 {
+					reg = <0x00000000 0x00100000>;
+					label = "freeloader";
+				};
+
+				partition@100000 {
+					reg = <0x00100000 0x00400000>;
+					label = "kernel_nor";
+				};
+
+				partition@500000 {
+					reg = <0x00500000 0x01400000>;
+					label = "ramfs_nor";
+				};
+
+				partition@1900000 {
+					reg = <0x01900000 0x00A00000>;
+					label = "jffs2_nor";
+				};
+			};
+		};
+	};
+
+	qspi1: spi@10016000 {
+		compatible = "sifive,spi0";
+		reg = <0x0 0x10016000 0x0 0x1000>;
+		interrupt-parent = <&plic0>;
+		interrupts = <6>;
+		clocks = <&hfclk2>;
+		num-cs = <1>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		/* Nuclei variant FIFO depth — see qspi0 comment */
+		sifive,fifo-depth = <4>;
+		status = "okay";
+  
+		spi-nand@1 {
+			compatible = "spi-nand";
+			reg = <1>;
+			spi-max-frequency = <25000000>;
+			spi-tx-bus-width = <1>;
+			spi-rx-bus-width = <1>;
+
+			partitions {
+				compatible = "fixed-partitions";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				partition@0 {
+					reg = <0x00000000 0x00800000>;
+					label = "kernel_nand";
+				};
+
+				partition@800000 {
+					reg = <0x00800000 0x07800000>;
+					label = "ubifs_nand";
+				};
+			};
+		};
+	};
+  
+	mac: ethernet@67800000 {
+		compatible = "fsl,fsl-mac";
+		reg = <0x0 0x67800000 0x0 0x1000>;
+		interrupt-parent = <&plic0>;
+		interrupts = <10>,<11>,<12>;
+		clocks = <&hfclk>;
+		num-cs = <1>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+	};	
+
+	gpio: gpio@10011000 {
+		compatible = "sifive,gpio0";
+		interrupt-parent = <&plic0>;
+		interrupts = <1>;
+		reg = <0x0 0x10011000 0x0 0x1000>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		clocks = <&hfclk>;
+		status = "okay";
+	};
+
+	i2c0: ocores@10018000 {
+		compatible = "opencores,i2c-ocores";
+		#address-cells = <1>;
+		#size-cells = <0>;     
+		interrupt-parent = <&plic0>;
+		interrupts = <4>;
+		reg = <0x0 0x10018000 0x0 0x1000>;
+		clock-frequency = <25000000>;
+	}; 
+
+  	wdt: watchdog@68000000 {
+		compatible = "riscv,fsl-wdt";
+		reg = <0x0 0x68000000 0x0 0x20>;
+		interrupt-parent = <&plic0>;
+		interrupts = <8>;
+		clocks = <&hfclk>;
+		status = "okay";
+	};		
+
+	/* TODO Vega: confirm exact GPIO numbers via `cat /sys/module/led_164/parameters/*`
+	 * on vendor 5.8 kernel. */
+	
+	/* Bit-banged SPI bus to drive the 74HC164 shift register chain */
+	led_spi: spi {
+		compatible = "spi-gpio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		sck-gpios = <&gpio 0 0>;	/* TODO: gpio_clk */
+		mosi-gpios = <&gpio 1 0>;	/* TODO: gpio_data */
+		cs-gpios = <&gpio 2 0>;		/* TODO: gpio_rst (active-low chip clear) */
+		num-chipselects = <1>;
+	
+		led_sr: gpio-controller@0 {
+			compatible = "fairchild,74hc595";  /* 74HC164 is shift-only, but 74HC595 driver
+			                                     also works */
+			reg = <0>;
+			spi-max-frequency = <100000>;
+			registers-number = <2>;  /* TODO: number of cascaded chips */
+			gpio-controller;
+			#gpio-cells = <2>;
+		};
+	};
+	
+	leds {
+		compatible = "gpio-leds";
+		
+		led-port0   { label = "vega:port0";   gpios = <&led_sr 0 0>; };
+		led-port1   { label = "vega:port1";   gpios = <&led_sr 1 0>; };
+		led-port2   { label = "vega:port2";   gpios = <&led_sr 2 0>; };
+		led-port3   { label = "vega:port3";   gpios = <&led_sr 3 0>; };
+		led-port4   { label = "vega:port4";   gpios = <&led_sr 4 0>; };
+		led-system  { label = "vega:system";  gpios = <&led_sr 5 0>; };
+	};
+	
+	preventloop-gpio {
+		compatible = "fixed-gpio-control";  /* TODO: stub — drive at boot */
+		gpios = <&gpio 16 0>;	/* TODO: gpio_preventloop */
+	};
+
+};

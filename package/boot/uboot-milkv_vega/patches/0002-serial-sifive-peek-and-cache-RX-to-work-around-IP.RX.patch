@@ -1,0 +1,89 @@
+From 7b7e58039a1ecfa8db442fdaf0fc98799a984dee Mon Sep 17 00:00:00 2001
+From: Vega Port <vega@milkv.local>
+Date: Sun, 24 May 2026 21:53:04 +0000
+Subject: [PATCH 2/2] serial: sifive: peek-and-cache RX to work around IP.RXWM
+ never firing
+
+On the Nuclei UART variant in the Fisilink FSL91030M, the IP.RXWM bit
+in the interrupt-pending register is never asserted, even when RXDATA
+contains a valid byte. ->pending() therefore always returns 0 and
+U-Boot's input loop spins without ever calling ->getc().
+
+Work around it by peeking RXDATA from pending(): if the RXEMPTY flag
+in the returned word is clear, cache the byte (the read is destructive
+on this core) and return "input available". getc() then drains the
+cache before talking to the FIFO again.
+
+No effect on standard SiFive cores: when IP.RXWM behaves normally the
+fast path returns at the IP check and the new cache never engages.
+---
+ drivers/serial/serial_sifive.c | 39 +++++++++++++++++++++++++++++-----
+ 1 file changed, 34 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/serial/serial_sifive.c b/drivers/serial/serial_sifive.c
+index e47828e4d6..600536344d 100644
+--- a/drivers/serial/serial_sifive.c
++++ b/drivers/serial/serial_sifive.c
+@@ -40,6 +40,17 @@ struct uart_sifive {
+ struct sifive_uart_plat {
+ 	unsigned long clock;
+ 	struct uart_sifive *regs;
++	/*
++	 * Some UART variants (notably the Nuclei one on the Milk-V Vega)
++	 * do not set IP.RXWM when there's data in the RX FIFO. The
++	 * upstream pending() function relied on that bit to signal
++	 * input. To work around it, peek a byte out of RX FIFO when
++	 * pending(input) is called and stash it here for the next
++	 * getc(); the next getc returns it instead of reading rxfifo
++	 * again.
++	 */
++	bool rx_buffered;
++	int rx_buf;
+ };
+ 
+ /**
+@@ -148,6 +159,11 @@ static int sifive_serial_getc(struct udevice *dev)
+ 	struct sifive_uart_plat *plat = dev_get_plat(dev);
+ 	struct uart_sifive *regs = plat->regs;
+ 
++	if (plat->rx_buffered) {
++		plat->rx_buffered = false;
++		return plat->rx_buf;
++	}
++
+ 	while ((c = _sifive_serial_getc(regs)) == -EAGAIN) ;
+ 
+ 	return c;
+@@ -167,11 +183,24 @@ static int sifive_serial_pending(struct udevice *dev, bool input)
+ {
+ 	struct sifive_uart_plat *plat = dev_get_plat(dev);
+ 	struct uart_sifive *regs = plat->regs;
+-
+-	if (input)
+-		return (readl(&regs->ip) & UART_IP_RXWM);
+-	else
+-		return !!(readl(&regs->txfifo) & UART_TXFIFO_FULL);
++	u32 r;
++
++	if (input) {
++		if (plat->rx_buffered)
++			return 1;
++		/*
++		 * Peek by reading rxfifo (destructive on SiFive UART) and
++		 * cache the byte for the next getc(). Works around the
++		 * Nuclei variant not setting IP.RXWM when FIFO non-empty.
++		 */
++		r = readl(&regs->rxfifo);
++		if (r & UART_RXFIFO_EMPTY)
++			return 0;
++		plat->rx_buf = r & UART_RXFIFO_DATA;
++		plat->rx_buffered = true;
++		return 1;
++	}
++	return !!(readl(&regs->txfifo) & UART_TXFIFO_FULL);
+ }
+ 
+ static int sifive_serial_of_to_plat(struct udevice *dev)
+-- 
+2.34.1
+

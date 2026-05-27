@@ -1,0 +1,12 @@
+From: Milk-V Vega OpenWrt port
+Subject: [PATCH] net: ethernet: include xy1000 subdirectory
+
+Pulls in drivers/net/ethernet/xy1000/ (provided via files-6.12).
+
+--- a/drivers/net/ethernet/Makefile
++++ b/drivers/net/ethernet/Makefile
+@@ -91,3 +91,4 @@ obj-$(CONFIG_NET_VENDOR_XIRCOM) += xirco
+ obj-$(CONFIG_NET_VENDOR_SYNOPSYS) += synopsys/
+ obj-$(CONFIG_NET_VENDOR_PENSANDO) += pensando/
+ obj-$(CONFIG_OA_TC6) += oa_tc6.o
++obj-y += xy1000/

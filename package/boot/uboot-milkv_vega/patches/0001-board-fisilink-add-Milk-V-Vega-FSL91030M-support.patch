@@ -1,0 +1,514 @@
+From 6c1b5be0e9b6030c44066ad19ffb89df551aae9d Mon Sep 17 00:00:00 2001
+From: Vega Port <vega@milkv.local>
+Date: Sun, 24 May 2026 21:53:04 +0000
+Subject: [PATCH 1/2] board: fisilink: add Milk-V Vega (FSL91030M) support
+
+The Milk-V Vega is a small RISC-V SBC built around the Fudan
+Microelectronics FSL91030M switch SoC (Nuclei UX608 core, RV64GC).
+
+Boot chain:
+ freeloader (boot ROM stage in SPI NOR) -> OpenSBI -> U-Boot (this) -> Linux
+
+By the time U-Boot runs, freeloader has brought up DDR, caches, and the
+console UART; OpenSBI has handed off the FDT in a1. There is therefore
+almost no board code: just the linker-required board_init stub.
+
+Hardware U-Boot actually drives at this stage:
+ - SiFive-compatible UART  (drivers/serial/serial_sifive.c)
+ - SiFive-compatible SPI   (drivers/spi/spi-sifive.c) -> SPI NAND
+ - MTD/SPI-NAND for kernel loading
+
+Everything else (clocks, reset, partition table, console settings,
+bootargs) comes from the device tree, so the defconfig stays tiny.
+---
+ arch/riscv/Kconfig                    |   4 +
+ arch/riscv/dts/Makefile               |   1 +
+ arch/riscv/dts/milkv-vega.dts         | 300 ++++++++++++++++++++++++++
+ board/fisilink/milkv_vega/Kconfig     |  33 +++
+ board/fisilink/milkv_vega/MAINTAINERS |   7 +
+ board/fisilink/milkv_vega/Makefile    |   3 +
+ board/fisilink/milkv_vega/vega.c      |  15 ++
+ configs/milkv_vega_defconfig          |  20 ++
+ include/configs/milkv-vega.h          |  15 ++
+ 9 files changed, 398 insertions(+)
+ create mode 100755 arch/riscv/dts/milkv-vega.dts
+ create mode 100644 board/fisilink/milkv_vega/Kconfig
+ create mode 100644 board/fisilink/milkv_vega/MAINTAINERS
+ create mode 100644 board/fisilink/milkv_vega/Makefile
+ create mode 100644 board/fisilink/milkv_vega/vega.c
+ create mode 100644 configs/milkv_vega_defconfig
+ create mode 100644 include/configs/milkv-vega.h
+
+diff --git a/arch/riscv/Kconfig b/arch/riscv/Kconfig
+index 79867656b1..6ccba69e97 100644
+--- a/arch/riscv/Kconfig
++++ b/arch/riscv/Kconfig
+@@ -29,6 +29,9 @@ config TARGET_MICROCHIP_GENERIC
+ config TARGET_MILKV_DUO
+ 	bool "Support Milk-v Duo Board"
+ 
++config TARGET_MILKV_VEGA
++	bool "Support Milk-V Vega (Fisilink FSL91030M)"
++
+ config TARGET_OPENPITON_RISCV64
+ 	bool "Support RISC-V cores on OpenPiton SoC"
+ 
+@@ -108,6 +111,7 @@ source "board/andestech/voyager/Kconfig"
+ source "board/aspeed/ibex_ast2700/Kconfig"
+ source "board/canaan/k230_canmv/Kconfig"
+ source "board/emulation/qemu-riscv/Kconfig"
++source "board/fisilink/milkv_vega/Kconfig"
+ source "board/microchip/mpfs_generic/Kconfig"
+ source "board/openpiton/riscv64/Kconfig"
+ source "board/sifive/unleashed/Kconfig"
+diff --git a/arch/riscv/dts/Makefile b/arch/riscv/dts/Makefile
+index 9b347fc3b5..094c02b93d 100644
+--- a/arch/riscv/dts/Makefile
++++ b/arch/riscv/dts/Makefile
+@@ -6,6 +6,7 @@ dtb-$(CONFIG_TARGET_BANANAPI_F3) += k1-bananapi-f3.dtb
+ dtb-$(CONFIG_TARGET_K230_CANMV) += k230-canmv.dtb
+ dtb-$(CONFIG_TARGET_MICROCHIP_ICICLE) += mpfs-icicle-kit.dtb
+ dtb-$(CONFIG_TARGET_MILKV_DUO) += cv1800b-milkv-duo.dtb
++dtb-$(CONFIG_TARGET_MILKV_VEGA) += milkv-vega.dtb
+ dtb-$(CONFIG_TARGET_LICHEERV_NANO) += sg2002-licheerv-nano-b.dtb
+ dtb-$(CONFIG_TARGET_QEMU_VIRT) += qemu-virt32.dtb qemu-virt64.dtb
+ dtb-$(CONFIG_TARGET_OPENPITON_RISCV64) += openpiton-riscv64.dtb
+diff --git a/arch/riscv/dts/milkv-vega.dts b/arch/riscv/dts/milkv-vega.dts
+new file mode 100755
+index 0000000000..48c8498f79
+--- /dev/null
++++ b/arch/riscv/dts/milkv-vega.dts
+@@ -0,0 +1,300 @@
++// SPDX-License-Identifier: (GPL-2.0 OR MIT)
++/* Copyright (c) 2020 Nuclei System Technologies */
++
++/* Clock frequency (in Hz) of the PCB crystal for rtcclk */
++/*#define RTCCLK_FREQ		32768*/
++
++/dts-v1/;
++
++/ {
++	#address-cells = <2>;
++	#size-cells = <2>;
++	compatible = "milkv,vega", "fisilink,fsl91030m";
++	model = "Milk-V Vega";
++
++	chosen {
++		bootargs = "earlycon=sbi console=ttySIF0,115200 ubi.mtd=6 root=ubi0:ubifs rw rootfstype=ubifs init=/linuxrc mem=256M user_debug=1";
++		stdout-path = "serial0";
++	};
++
++	aliases {
++		serial0 = &uart0;
++		serial1 = &uart1;
++	};
++
++	cpus {
++		#address-cells = <1>;
++		#size-cells = <0>;
++		timebase-frequency = <48828>;
++		
++		cpu0: cpu@0 {
++			device_type = "cpu";
++			reg = <0>;
++			status = "okay";
++			compatible = "riscv";
++			riscv,isa = "rv64imafdc";
++			mmu-type = "riscv,sv39";
++			clock-frequency = <400000000>;
++		
++			cpu0_intc: interrupt-controller {
++				#interrupt-cells = <1>;
++				interrupt-controller;
++				compatible = "riscv,cpu-intc";
++			};
++		};
++	};
++
++	memory@41000000 {
++		device_type = "memory";
++		reg = <0x0 0x41000000 0x0 0xf000000>;
++	};
++
++	soc {
++		#address-cells = <2>;
++		#size-cells = <2>;
++		compatible = "nuclei,ux600fd", "simple-bus";
++		ranges;
++	};
++
++	hfclk: hfclk {
++		#clock-cells = <0>;
++		compatible = "fixed-clock";
++		clock-frequency = <200000000>;
++		clock-output-names = "hfclk";
++	};
++ 
++ 	hfclk2: hfclk2 {
++		#clock-cells = <0>;
++		compatible = "fixed-clock";
++		clock-frequency = <100000000>;
++		clock-output-names = "hfclk2";
++	};
++
++	console {
++		compatible = "sbi,console";
++	};
++
++	plic0: interrupt-controller@8000000 {
++		#interrupt-cells = <1>;
++		compatible = "riscv,plic0";
++		interrupt-controller;
++		riscv,ndev = <53>;
++		interrupts-extended =
++		<&cpu0_intc 11 &cpu0_intc 9>;
++		reg = <0x0 0x8000000 0x0 0x4000000>;
++	};
++
++	/*
++	 * Split ACLINT description of the Nuclei timer block (CLINT-
++	 * compatible part starts at +0x1000). The "riscv,aclint-mswi"
++	 * and "riscv,aclint-mtimer" compatibles let OpenSBI's FDT
++	 * driver take sizes from DT reg (instead of the sifive,clint0
++	 * path which hardcodes the 16 KiB MSWI / 32 KiB mtimecmp
++	 * sizes that fragment the PMP map on this 8-PMP-entry SoC).
++	 *
++	 * Linux and U-Boot here use SBI for timer/IPI, so they don't
++	 * care whether we describe it as CLINT or split ACLINT.
++	 */
++	mswi: mswi@2001000 {
++		compatible = "riscv,aclint-mswi";
++		reg = <0x0 0x02001000 0x0 0x1000>;
++		interrupts-extended = <&cpu0_intc 3>;
++	};
++
++	mtimer: mtimer@2005000 {
++		compatible = "riscv,aclint-mtimer";
++		reg = <0x0 0x02005000 0x0 0x8>,     /* mtimecmp */
++		      <0x0 0x0200cff8 0x0 0x8>;     /* mtime */
++		reg-names = "mtimecmp", "mtime";
++		interrupts-extended = <&cpu0_intc 7>;
++	};
++
++	/*
++	 * Syscon covering the Nuclei-private slice of the timer block
++	 * (0x02000000-0x02000FFF) so we can describe the MSFTRST reset
++	 * register at offset 0xFF0 as a generic syscon-reboot node.
++	 * The CLINT-compatible part starts at +0x1000 and lives in its
++	 * own node above.
++	 */
++	syscon: syscon@2000000 {
++		compatible = "syscon", "simple-mfd";
++		reg = <0x0 0x02000000 0x0 0x1000>;
++	};
++
++	reboot {
++		compatible = "syscon-reboot";
++		regmap = <&syscon>;
++		offset = <0xff0>;
++		mask = <0xffffffff>;
++		value = <0x80000a5f>;
++	};
++
++	poweroff {
++		compatible = "syscon-poweroff";
++		regmap = <&syscon>;
++		offset = <0xff0>;
++		mask = <0xffffffff>;
++		value = <0x80000a5f>;
++	};
++
++	uart0: serial@10013000 {
++		compatible = "sifive,uart0";
++		reg = <0x0 0x10013000 0x0 0x1000>;
++		interrupt-parent = <&plic0>;
++		interrupts = <2>;
++		clocks = <&hfclk2>;
++		clock-frequency = <100000000>;
++		current-speed = <115200>;
++		status = "okay";
++	};
++
++	uart1: serial@10012000 {
++		compatible = "sifive,uart0";
++		reg = <0x0 0x10012000 0x0 0x1000>;
++		interrupt-parent = <&plic0>;
++		interrupts = <3>;
++		clocks = <&hfclk2>;
++		status = "disabled";
++	};
++  
++	qspi0: spi@10014000 {
++		compatible = "sifive,spi0";
++		reg = <0x0 0x10014000 0x0 0x1000>;
++		interrupt-parent = <&plic0>;
++		interrupts = <5>;
++		clocks = <&hfclk2>;
++		num-cs = <1>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++		/*
++		 * Nuclei variant: 4-entry TX/RX FIFO instead of the SiFive
++		 * default of 8. Without this property the upstream driver
++		 * sets RX watermark to (n_words - 1) for n_words=8, which
++		 * never fires on a 4-entry FIFO and every transfer times
++		 * out ("failed to xfer data").
++		 */
++		sifive,fifo-depth = <4>;
++		status = "okay";
++
++		flash@1 {
++			compatible = "jedec,spi-nor";
++			reg = <1>;
++			spi-tx-bus-width = <1>;
++			spi-rx-bus-width = <1>;
++			spi-max-frequency = <25000000>;
++
++			partitions {
++				compatible = "fixed-partitions";
++				#address-cells = <1>;
++				#size-cells = <1>;
++
++				partition@0 {
++					reg = <0x00000000 0x00100000>;
++					label = "freeloader";
++				};
++
++				partition@100000 {
++					reg = <0x00100000 0x00400000>;
++					label = "kernel_nor";
++				};
++
++				partition@500000 {
++					reg = <0x00500000 0x01400000>;
++					label = "ramfs_nor";
++				};
++
++				partition@1900000 {
++					reg = <0x01900000 0x00A00000>;
++					label = "jffs2_nor";
++				};
++			};
++		};
++	};
++
++	qspi1: spi@10016000 {
++		compatible = "sifive,spi0";
++		reg = <0x0 0x10016000 0x0 0x1000>;
++		interrupt-parent = <&plic0>;
++		interrupts = <6>;
++		clocks = <&hfclk2>;
++		num-cs = <1>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++		/* Nuclei variant FIFO depth — see qspi0 comment */
++		sifive,fifo-depth = <4>;
++		status = "okay";
++  
++		spi-nand@1 {
++			compatible = "spi-nand";
++			reg = <1>;
++			spi-max-frequency = <25000000>;
++			spi-tx-bus-width = <1>;
++			spi-rx-bus-width = <1>;
++
++			partitions {
++				compatible = "fixed-partitions";
++				#address-cells = <1>;
++				#size-cells = <1>;
++
++				partition@0 {
++					reg = <0x00000000 0x00800000>;
++					label = "kernel_nand";
++				};
++
++				partition@800000 {
++					reg = <0x00800000 0x01000000>;
++					label = "ramfs_nand";
++				};
++
++				partition@1800000 {
++					reg = <0x01800000 0x02800000>;
++					label = "ubifs_nand";
++				};
++			};
++		};
++	};
++  
++	mac: ethernet@67800000 {
++		compatible = "fsl,fsl-mac";
++		reg = <0x0 0x67800000 0x0 0x1000>;
++		interrupt-parent = <&plic0>;
++		interrupts = <10>,<11>,<12>;
++		clocks = <&hfclk>;
++		num-cs = <1>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++		status = "okay";
++	};	
++
++	gpio: gpio@10011000 {
++		compatible = "sifive,gpio0";
++		interrupt-parent = <&plic0>;
++		interrupts = <1>;
++		reg = <0x0 0x10011000 0x0 0x1000>;
++		gpio-controller;
++		#gpio-cells = <2>;
++		interrupt-controller;
++		#interrupt-cells = <2>;
++		clocks = <&hfclk>;
++		status = "okay";
++	};
++
++	i2c0: ocores@10018000 {
++		compatible = "opencores,i2c-ocores";
++		#address-cells = <1>;
++		#size-cells = <0>;     
++		interrupt-parent = <&plic0>;
++		interrupts = <4>;
++		reg = <0x0 0x10018000 0x0 0x1000>;
++		clock-frequency = <25000000>;
++	}; 
++
++  	wdt: watchdog@68000000 {
++		compatible = "riscv,fsl-wdt";
++		reg = <0x0 0x68000000 0x0 0x20>;
++		interrupt-parent = <&plic0>;
++		interrupts = <8>;
++		clocks = <&hfclk>;
++		status = "okay";
++	};		
++};
+\ No newline at end of file
+diff --git a/board/fisilink/milkv_vega/Kconfig b/board/fisilink/milkv_vega/Kconfig
+new file mode 100644
+index 0000000000..15be11cf88
+--- /dev/null
++++ b/board/fisilink/milkv_vega/Kconfig
+@@ -0,0 +1,33 @@
++if TARGET_MILKV_VEGA
++
++config SYS_BOARD
++	default "milkv_vega"
++
++config SYS_VENDOR
++	default "fisilink"
++
++config SYS_CPU
++	default "generic"
++
++config SYS_CONFIG_NAME
++	default "milkv-vega"
++
++config TEXT_BASE
++	default 0x41200000
++
++config BOARD_SPECIFIC_OPTIONS # dummy
++	def_bool y
++	select GENERIC_RISCV
++	imply OF_HAS_PRIOR_STAGE
++	imply HUSH_PARSER
++	imply SIFIVE_SERIAL
++	imply CMD_MTD
++	imply DM_MTD
++	imply MTD
++	imply MTD_SPI_NAND
++	imply SPI
++	imply DM_SPI
++	imply SPI_MEM
++	imply SPI_SIFIVE
++
++endif
+diff --git a/board/fisilink/milkv_vega/MAINTAINERS b/board/fisilink/milkv_vega/MAINTAINERS
+new file mode 100644
+index 0000000000..e9ebb08508
+--- /dev/null
++++ b/board/fisilink/milkv_vega/MAINTAINERS
+@@ -0,0 +1,7 @@
++MILK-V VEGA / FISILINK FSL91030M
++M:	Vega community <community.milkv.io>
++S:	Maintained
++F:	board/fisilink/milkv_vega/
++F:	configs/milkv_vega_defconfig
++F:	arch/riscv/dts/milkv-vega.dts
++F:	include/configs/milkv-vega.h
+diff --git a/board/fisilink/milkv_vega/Makefile b/board/fisilink/milkv_vega/Makefile
+new file mode 100644
+index 0000000000..f25f8e9a55
+--- /dev/null
++++ b/board/fisilink/milkv_vega/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0+
++
++obj-y += vega.o
+diff --git a/board/fisilink/milkv_vega/vega.c b/board/fisilink/milkv_vega/vega.c
+new file mode 100644
+index 0000000000..e4951c2ae3
+--- /dev/null
++++ b/board/fisilink/milkv_vega/vega.c
+@@ -0,0 +1,15 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Milk-V Vega (Fisilink FSL91030M / Nuclei UX608) board glue.
++ *
++ * Freeloader brings up DDR + caches + UART; OpenSBI hands the FDT
++ * in a1; everything else is in the device tree. board_init is empty
++ * but the symbol is required by the linker.
++ */
++
++#include <init.h>
++
++int board_init(void)
++{
++	return 0;
++}
+diff --git a/configs/milkv_vega_defconfig b/configs/milkv_vega_defconfig
+new file mode 100644
+index 0000000000..fc74b1ac15
+--- /dev/null
++++ b/configs/milkv_vega_defconfig
+@@ -0,0 +1,20 @@
++CONFIG_RISCV=y
++CONFIG_SYS_MALLOC_LEN=0x800000
++CONFIG_NR_DRAM_BANKS=1
++CONFIG_HAS_CUSTOM_SYS_INIT_SP_ADDR=y
++CONFIG_CUSTOM_SYS_INIT_SP_ADDR=0x41600000
++CONFIG_DEFAULT_DEVICE_TREE="milkv-vega"
++CONFIG_SYS_LOAD_ADDR=0x42000000
++CONFIG_TARGET_MILKV_VEGA=y
++CONFIG_ARCH_RV64I=y
++CONFIG_RISCV_SMODE=y
++# CONFIG_EFI_LOADER is not set
++CONFIG_AUTOBOOT_KEYED=y
++CONFIG_AUTOBOOT_PROMPT="Press 'asd' to abort autoboot in %d seconds\n"
++CONFIG_AUTOBOOT_STOP_STR="asd"
++CONFIG_USE_BOOTCOMMAND=y
++CONFIG_BOOTCOMMAND="mtd list && mtd read kernel_nand 0x42000000 0 0x800000 && bootm 0x42000000 - ${fdtcontroladdr}"
++# CONFIG_CMD_BOOTI is not set
++# CONFIG_CMD_SF is not set
++# CONFIG_SPI_FLASH is not set
++CONFIG_LZ4=y
+diff --git a/include/configs/milkv-vega.h b/include/configs/milkv-vega.h
+new file mode 100644
+index 0000000000..b147ffdda7
+--- /dev/null
++++ b/include/configs/milkv-vega.h
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Milk-V Vega (Fisilink FSL91030M / Nuclei UX608) board config.
++ *
++ * Almost nothing here — modern u-boot moves configuration to
++ * defconfig. We just declare the SDRAM base; the timer frequency
++ * and everything else comes from the device tree.
++ */
++
++#ifndef __MILKV_VEGA_H
++#define __MILKV_VEGA_H
++
++#define CFG_SYS_SDRAM_BASE	0x41000000
++
++#endif /* __MILKV_VEGA_H */
+-- 
+2.34.1
+

@@ -1,0 +1,19 @@
+# Build artifacts (the build.sh script clones OpenWrt here)
+/openwrt/
+
+# Tarballs / blobs that shouldn't be committed
+*.tar.xz
+*.tar.gz
+*.tar.bz2
+*.bin
+*.ubi
+*.ko
+
+# Vendor binary blobs and backup configs
+**/config-*.bak
+**/*.bak
+
+# Editor scratch
+*~
+.*.swp
+.DS_Store
