@@ -12,7 +12,7 @@ KERNELNAME:=Image
 
 include $(INCLUDE_DIR)/target.mk
 
-DEFAULT_PACKAGES += uboot-envtools
+DEFAULT_PACKAGES += uboot-envtools opensbi_generic uboot-milkv_vega-milkv_vega vega-spl
 
 define Target/Description
 	Build firmware images for Milk-V Vega (Fisilink FSL91030M, Nuclei UX608)

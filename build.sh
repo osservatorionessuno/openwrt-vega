@@ -27,6 +27,14 @@ rsync -a "$PORT_DIR/target/linux/milkv_vega/"       target/linux/milkv_vega/
 rsync -a "$PORT_DIR/package/boot/vega-spl/"          package/boot/vega-spl/
 rsync -a "$PORT_DIR/package/boot/uboot-milkv_vega/"  package/boot/uboot-milkv_vega/
 
+echo "==> Allowing opensbi to build for milkv_vega"
+# Stock OpenWrt restricts opensbi-generic to sifiveu/d1; widen to include
+# milkv_vega. Idempotent: only adds the target if it's not already listed.
+if ! grep -q "TARGET_milkv_vega" package/boot/opensbi/Makefile; then
+    sed -i 's/@(TARGET_sifiveu||TARGET_d1)/@(TARGET_sifiveu||TARGET_d1||TARGET_milkv_vega)/' \
+        package/boot/opensbi/Makefile
+fi
+
 echo "==> Setting up feeds"
 ./scripts/feeds update -a >/dev/null
 ./scripts/feeds install -a >/dev/null
