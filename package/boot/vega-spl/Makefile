@@ -18,7 +18,12 @@ include $(INCLUDE_DIR)/package.mk
 define Package/vega-spl
   SECTION:=boot
   CATEGORY:=Boot Loaders
-  DEPENDS:=@TARGET_milkv_vega
+  # opensbi-generic and u-boot-milkv_vega are needed at *build* time:
+  # Build/Compile copies their staged artifacts (fw_dynamic-generic.bin and
+  # u-boot.bin) into PKG_BUILD_DIR and incbins them. Without these in
+  # DEPENDS, parallel builds can race and vega-spl tries to read the
+  # artifacts before they exist.
+  DEPENDS:=@TARGET_milkv_vega +opensbi_generic +u-boot-milkv_vega
   TITLE:=Milk-V Vega first-stage SPL
   URL:=https://milkv.io/
 endef
