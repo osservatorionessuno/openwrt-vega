@@ -56,7 +56,7 @@ cp "${HERE}/configs/openocd-board.cfg" "${SRC_DIR}/openocd-slow.cfg"
 echo "==> configuring"
 pushd "${SRC_DIR}" >/dev/null
 ./bootstrap
-./configure --enable-ftdi --disable-werror
+./configure --enable-ftdi --enable-xlnx-pcie-xvc=no --disable-werror
 echo "==> building OpenOCD (jobs=${JOBS})"
 make -j"${JOBS}"
 popd >/dev/null
