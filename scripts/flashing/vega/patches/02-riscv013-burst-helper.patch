@@ -1,0 +1,162 @@
+diff --git a/src/target/riscv/riscv-013.c b/src/target/riscv/riscv-013.c
+index 6d5bd4028..a04fa63f6 100644
+--- a/src/target/riscv/riscv-013.c
++++ b/src/target/riscv/riscv-013.c
+@@ -5002,6 +5002,141 @@ static int write_memory_progbuf_inner(struct target *target, const riscv_mem_acc
+ 	return write_memory_progbuf_teardown(target);
+ }
+ 
++/* ====================================================================
++ * Burst write to a fixed MMIO address (e.g. SPI controller TXDATA FIFO).
++ *
++ * Strategy: load a progbuf "sw/sh/sb s1, 0(s0); ebreak", set s0=addr, then
++ * enable abstractauto.autoexecdata. Each subsequent write to DM_DATA0 over
++ * DMI auto-fires the progbuf, moving the new byte to s1 and storing it at
++ * the fixed address in s0. We queue many DM_DATA0 writes in a single DMI
++ * batch so all of them go out as one USB transaction.
++ *
++ * Per-byte cost drops from ~3 USB round-trips (data0 + command + ack) to
++ * roughly 1 DMI scan, with the whole batch amortized into one USB
++ * transaction. On this platform that's an additional ~3–5x over the
++ * "no-poll" patch.
++ * ==================================================================== */
++int riscv013_write_burst_to_addr(struct target *target, target_addr_t addr,
++		uint32_t size, uint32_t count, const uint8_t *buffer)
++{
++	if (size != 1 && size != 2 && size != 4) {
++		LOG_TARGET_ERROR(target, "burst write: unsupported size %u", size);
++		return ERROR_FAIL;
++	}
++	if (count == 0)
++		return ERROR_OK;
++
++	if (dm013_select_target(target) != ERROR_OK)
++		return ERROR_FAIL;
++
++	dm013_info_t *dm = get_dm(target);
++	if (!dm)
++		return ERROR_FAIL;
++
++	if (riscv013_reg_save(target, GDB_REGNO_S0) != ERROR_OK)
++		return ERROR_FAIL;
++	if (riscv013_reg_save(target, GDB_REGNO_S1) != ERROR_OK)
++		return ERROR_FAIL;
++
++	/* progbuf: "sb/sh/sw s1, 0(s0); ebreak" — no addi, address stays put */
++	struct riscv_program program;
++	riscv_program_init(&program, target);
++	if (riscv_program_store(&program, GDB_REGNO_S1, GDB_REGNO_S0, 0, size) != ERROR_OK)
++		return ERROR_FAIL;
++	if (riscv_program_ebreak(&program) != ERROR_OK)
++		return ERROR_FAIL;
++	if (riscv_program_write(&program) != ERROR_OK)
++		return ERROR_FAIL;
++
++	if (register_write_direct(target, GDB_REGNO_S0, addr) != ERROR_OK)
++		return ERROR_FAIL;
++
++	/* First byte: write data0, then issue command (transfer + postexec) so
++	 * s1 picks up the value and the progbuf runs once. */
++	const uint64_t first_value = buf_get_u64(buffer, 0, 8 * size);
++	if (write_abstract_arg(target, /*index*/ 0, first_value, 32) != ERROR_OK)
++		return ERROR_FAIL;
++
++	const uint32_t command = riscv013_access_register_command(target,
++			GDB_REGNO_S1, riscv_xlen(target),
++			AC_ACCESS_REGISTER_POSTEXEC |
++			AC_ACCESS_REGISTER_TRANSFER |
++			AC_ACCESS_REGISTER_WRITE);
++
++	uint32_t cmderr;
++	int result = riscv013_execute_abstract_command(target, command, &cmderr);
++	if (result != ERROR_OK)
++		return result;
++
++	if (count == 1)
++		return ERROR_OK;
++
++	/* Enable autoexec: any further write to DM_DATA0 re-fires the progbuf. */
++	if (dm_write(target, DM_ABSTRACTAUTO,
++				1 << DM_ABSTRACTAUTO_AUTOEXECDATA_OFFSET) != ERROR_OK)
++		return ERROR_FAIL;
++
++	uint32_t sent = 1;
++	while (sent < count) {
++		struct riscv_batch *batch = riscv_batch_alloc(target, RISCV_BATCH_ALLOC_SIZE);
++		if (!batch) {
++			dm_write(target, DM_ABSTRACTAUTO, 0);
++			return ERROR_FAIL;
++		}
++		/* Reserve 2 scans: terminating NOP + one safety margin. */
++		size_t cap = riscv_batch_available_scans(batch);
++		if (cap < 4) {
++			riscv_batch_free(batch);
++			dm_write(target, DM_ABSTRACTAUTO, 0);
++			return ERROR_FAIL;
++		}
++		uint32_t can_send = (uint32_t)(cap - 2);
++		uint32_t remaining = count - sent;
++		uint32_t this_batch = remaining < can_send ? remaining : can_send;
++
++		for (uint32_t i = 0; i < this_batch; i++) {
++			const uint8_t *p = buffer + (sent + i) * size;
++			const uint64_t v = buf_get_u64(p, 0, 8 * size);
++			riscv_batch_add_dm_write(batch, DM_DATA0, (uint32_t)v,
++					/* read_back */ false, RISCV_DELAY_ABSTRACT_COMMAND);
++		}
++
++		dm->abstract_cmd_maybe_busy = true;
++		if (batch_run(target, batch) != ERROR_OK) {
++			riscv_batch_free(batch);
++			dm_write(target, DM_ABSTRACTAUTO, 0);
++			return ERROR_FAIL;
++		}
++
++		uint32_t abstractcs;
++		if (wait_for_idle(target, &abstractcs) != ERROR_OK) {
++			riscv_batch_free(batch);
++			dm_write(target, DM_ABSTRACTAUTO, 0);
++			return ERROR_FAIL;
++		}
++		cmderr = get_field32(abstractcs, DM_ABSTRACTCS_CMDERR);
++		if (cmderr != CMDERR_NONE) {
++			LOG_TARGET_ERROR(target,
++					"burst write: abstractcs.cmderr=%" PRIu32 " after batch of %"
++					PRIu32 " writes (sent %" PRIu32 "/%" PRIu32 ")",
++					cmderr, this_batch, sent, count);
++			riscv013_clear_abstract_error(target);
++			riscv_batch_free(batch);
++			dm_write(target, DM_ABSTRACTAUTO, 0);
++			return ERROR_FAIL;
++		}
++
++		sent += this_batch;
++		riscv_batch_free(batch);
++	}
++
++	/* Disable autoexec so subsequent ops behave normally. */
++	if (dm_write(target, DM_ABSTRACTAUTO, 0) != ERROR_OK)
++		return ERROR_FAIL;
++
++	return ERROR_OK;
++}
++
+ static mem_access_result_t
+ write_memory_progbuf(struct target *target, const riscv_mem_access_args_t args)
+ {
+diff --git a/src/target/riscv/riscv-013.h b/src/target/riscv/riscv-013.h
+index ca2d4aefc..3addfe5ce 100644
+--- a/src/target/riscv/riscv-013.h
++++ b/src/target/riscv/riscv-013.h
+@@ -24,4 +24,11 @@ uint32_t riscv013_access_register_command(struct target *target, uint32_t number
+ int riscv013_execute_abstract_command(struct target *target, uint32_t command,
+ 		uint32_t *cmderr);
+ 
++/* Burst-write `count` words of `size` bytes from `buffer` to the SAME
++ * MMIO address `addr`. Designed for SPI FIFO TXDATA-style registers where
++ * every write goes to the same address. Uses abstractauto + DMI batching
++ * to amortize per-byte USB latency. */
++int riscv013_write_burst_to_addr(struct target *target, target_addr_t addr,
++		uint32_t size, uint32_t count, const uint8_t *buffer);
++
+ #endif /* OPENOCD_TARGET_RISCV_RISCV_013_H */

@@ -24,6 +24,34 @@ driver, though there's one network interface available for management.
 Clones OpenWrt at a known-good commit, overlays this repo's files, and runs
 `make`. Output goes to `openwrt/bin/targets/milkv_vega/milkv_vega/`.
 
+## Flashing and recovery
+
+This repo carries the JTAG flashing kit under `scripts/flashing/vega/`. It
+clones the Nuclei `riscv-openocd` fork, applies the Vega patches, builds
+OpenOCD, and provides scripts for NOR SPL recovery and NAND kernel/rootfs
+flashing.
+
+```sh
+./scripts/flashing/vega/bootstrap.sh
+
+OUT=openwrt/bin/targets/milkv_vega/milkv_vega
+./scripts/flashing/vega/flash.sh nor "$OUT/vega-spl.bin"
+./scripts/flashing/vega/flash.sh nand kernel "$OUT/openwrt-milkv_vega-milkv_vega-milkv_vega-ubifs-kernel.bin"
+./scripts/flashing/vega/flash.sh nand rootfs "$OUT/openwrt-milkv_vega-milkv_vega-milkv_vega-ubifs-rootfs.ubi"
+```
+
+Explicit OpenOCD environment form:
+
+```sh
+OPENOCD=$PWD/scripts/flashing/vega/riscv-openocd/src/openocd \
+OPENOCD_CFG=$PWD/scripts/flashing/vega/riscv-openocd/openocd-slow.cfg \
+./scripts/flashing/vega/flash.sh nor /path/to/vega-spl.bin
+```
+
+For a blank or bricked board, power-cycle, flash `vega-spl.bin` to NOR first,
+power-cycle again, then flash the NAND kernel and rootfs. See
+`docs/FLASHING.md` for backup, UART, and recovery notes.
+
 ## What this port carries
 
 ### Kernel patches (`target/linux/milkv_vega/patches-6.12/`)
@@ -57,9 +85,20 @@ OpenSBI → U-Boot → Linux. Notable bits:
 - `target/linux/milkv_vega/base-files/` — standard OpenWrt
   per-target overlay
 
+### Flashing kit (`scripts/flashing/vega/`)
+
+- `bootstrap.sh` clones the pinned Nuclei OpenOCD fork, applies the
+  `scripts/flashing/vega/patches/` speed/recovery patches, builds OpenOCD, and
+  generates the NAND helper stubs.
+- `flash.sh` flashes the NOR SPL, NAND kernel, and NAND rootfs using
+  the patched OpenOCD.
+- `configs/openocd-board.cfg` contains the Vega FTDI/JTAG and slow-path NOR
+  flash configuration that `bootstrap.sh` installs as
+  `riscv-openocd/openocd-slow.cfg`.
+
 ## Documentation
 
-- `docs/FLASHING.md` — how to write the three images to NOR/NAND
+- `docs/FLASHING.md` — how to build the flasher, write the three images, and recover a board
 - `docs/ASID_BUG.md` — the silent memory corruption bug we bisected
 - `docs/LED_MAP.md` — empirical bit-to-LED map of the 32-output chain
 - `docs/HARDWARE.md` — what we know about the SoC and board

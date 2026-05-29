@@ -1,0 +1,44 @@
+diff --git a/src/flash/nor/nuspi.c b/src/flash/nor/nuspi.c
+index 2acd5b6ce..14a8e67cc 100644
+--- a/src/flash/nor/nuspi.c
++++ b/src/flash/nor/nuspi.c
+@@ -43,6 +43,7 @@
+ #include <helper/time_support.h>
+ #include <target/algorithm.h>
+ #include "target/riscv/riscv.h"
++#include "target/riscv/riscv-013.h"
+ 
+ /* Register offsets */
+ 
+@@ -722,9 +723,28 @@ static int slow_nuspi_write_buffer(struct flash_bank *bank,
+ 	if (nuspi_tx(bank, offset) != ERROR_OK)
+ 		return ERROR_FAIL;
+ 
+-	for (ii = 0; ii < len; ii++) {
+-		if (nuspi_tx(bank, buffer[ii]) != ERROR_OK)
+-			return ERROR_FAIL;
++	/* Burst-write all data bytes to TXDATA via abstractauto + DMI batching.
++	 * NUSPI TXDATA is a 32-bit MMIO register that uses only the low 8 bits
++	 * per write — we need 32-bit stores with the byte in the low position.
++	 * Pre-expand the byte stream into a uint32_t array so the burst helper
++	 * can use `sw s1, 0(s0)`. */
++	uint32_t *expanded = malloc((size_t)len * sizeof(uint32_t));
++	if (!expanded) {
++		LOG_ERROR("burst write: out of memory");
++		return ERROR_FAIL;
++	}
++	for (ii = 0; ii < len; ii++)
++		expanded[ii] = buffer[ii];
++	int burst_rc = riscv013_write_burst_to_addr(bank->target,
++			nuspi_info->ctrl_base + NUSPI_REG_TXDATA,
++			/*size*/ 4, /*count*/ len, (const uint8_t *)expanded);
++	free(expanded);
++	if (burst_rc != ERROR_OK) {
++		LOG_DEBUG("burst write failed, falling back to per-byte path");
++		for (ii = 0; ii < len; ii++) {
++			if (nuspi_write_reg(bank, NUSPI_REG_TXDATA, buffer[ii]) != ERROR_OK)
++				return ERROR_FAIL;
++		}
+ 	}
+ 
+ 	if (nuspi_txwm_wait(bank) != ERROR_OK)

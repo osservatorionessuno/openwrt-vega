@@ -1,0 +1,40 @@
+name: Build Vega flashing kit
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-flashing-kit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout port files
+        uses: actions/checkout@v4
+
+      - name: Install OpenOCD build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf automake build-essential git libftdi1-dev libtool \
+            libusb-1.0-0-dev pkg-config python3 texinfo
+
+      - name: Build patched OpenOCD and helper stubs
+        run: |
+          SKIP_DEPS=1 JOBS="$(nproc)" ./scripts/flashing/vega/bootstrap.sh
+
+      - name: Verify flashing kit outputs
+        run: |
+          kit=scripts/flashing/vega
+          test -x "$kit/riscv-openocd/src/openocd"
+          "$kit/riscv-openocd/src/openocd" --version
+          cmp "$kit/configs/openocd-board.cfg" "$kit/riscv-openocd/openocd-slow.cfg"
+          test -s "$kit/stubs/nand_read_stub.bin"
+          test -s "$kit/stubs/nand_write_stub.bin"
+          test -s "$kit/stubs/nand_erase_stub.bin"
+          bash -n "$kit/bootstrap.sh" "$kit/flash.sh" "$kit/dump-flash.sh" \
+            "$kit/jtag-dump.sh" "$kit/sector-diff.sh"
