@@ -1,0 +1,21 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+
+. /lib/functions/uci-defaults.sh
+
+board_config_update
+
+case "$(board_name)" in
+milkv,vega)
+	for port in 5 6 7 8 9 10 11 12; do
+		ucidef_set_led_netdev "g${port}-link" "G${port} link" \
+			"vega:g${port}:link" "g${port}" "link"
+		ucidef_set_led_netdev "g${port}-act" "G${port} activity" \
+			"vega:g${port}:act" "g${port}" "tx rx"
+	done
+	;;
+esac
+
+board_config_flush
+
+exit 0

@@ -19,7 +19,9 @@ define Device/milkv_vega
 	DEVICE_VENDOR := Milk-V
 	DEVICE_MODEL := Vega
 	DEVICE_DTS := fisilink/milkv-vega
-	SUPPORTED_DEVICES := milkv,vega fisilink,fsl91030m
+	DEVICE_PACKAGES := ip-bridge kmod-fsl91030m-switch kmod-xy1000-pdma
+	SUPPORTED_DEVICES := milkv,vega
+	KERNEL_SIZE := 6144k
 	BLOCKSIZE := 128k
 	PAGESIZE := 2048
 	SUBPAGESIZE := 2048

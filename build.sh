@@ -20,12 +20,12 @@ pushd "$OPENWRT_DIR" >/dev/null
 echo "==> Resetting OpenWrt to $OPENWRT_COMMIT"
 git fetch
 git checkout --quiet "$OPENWRT_COMMIT"
-git clean -fdx -- target/linux/milkv_vega package/boot/vega-spl package/boot/uboot-milkv_vega || true
+git clean -fdx -- target/linux/milkv_vega \
+    package/boot/vega-spl package/boot/uboot-milkv_vega || true
 
 echo "==> Overlaying port files from $PORT_DIR"
 rsync -a "$PORT_DIR/target/linux/milkv_vega/"       target/linux/milkv_vega/
-rsync -a "$PORT_DIR/package/boot/vega-spl/"          package/boot/vega-spl/
-rsync -a "$PORT_DIR/package/boot/uboot-milkv_vega/"  package/boot/uboot-milkv_vega/
+rsync -a "$PORT_DIR/package/"                        package/
 
 echo "==> Allowing opensbi to build for milkv_vega"
 # Stock OpenWrt restricts opensbi-generic to sifiveu/d1; widen to include
@@ -39,13 +39,31 @@ echo "==> Setting up feeds"
 ./scripts/feeds update -a >/dev/null
 ./scripts/feeds install -a >/dev/null
 
+echo "==> Refreshing package metadata"
+rm -f tmp/.packageinfo tmp/.config-package.in \
+      tmp/info/.packageinfo-kernel_linux \
+      tmp/info/.files-packageinfo* \
+      tmp/info/.overrides-packageinfo-*
+make prepare-tmpinfo >/dev/null
+
 echo "==> Configuring for milkv_vega"
 cat > .config <<'EOF'
 CONFIG_TARGET_milkv_vega=y
 CONFIG_TARGET_milkv_vega_milkv_vega=y
 CONFIG_TARGET_milkv_vega_milkv_vega_DEVICE_milkv_vega=y
+# CONFIG_KERNEL_DEBUG_FS is not set
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_tc-full=y
+CONFIG_PACKAGE_kmod-xy1000-pdma=y
+CONFIG_PACKAGE_kmod-sched=y
+CONFIG_PACKAGE_kmod-sched-red=y
+CONFIG_PACKAGE_libi2c=y
+CONFIG_PACKAGE_i2c-tools=y
 EOF
 make defconfig
+
+echo "==> Cleaning target kernel build tree"
+make target/linux/clean
 
 echo "==> Building (jobs=$JOBS)"
 make -j"$JOBS" V=s

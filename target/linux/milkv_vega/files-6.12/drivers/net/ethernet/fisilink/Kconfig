@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config NET_VENDOR_FISILINK
+	bool "FisiLink devices"
+	default y
+	depends on RISCV || COMPILE_TEST
+	help
+	  Say Y here to enable support for Ethernet controllers and switch
+	  fabrics made by FisiLink.
+
+	  This option enables the FisiLink Ethernet driver menu. Individual
+	  drivers still need to be selected below.
+
+if NET_VENDOR_FISILINK
+
+config FSL91030M_SWITCH
+	tristate "FisiLink FSL91030M Ethernet switch fabric"
+	depends on HAS_IOMEM
+	depends on OF
+	depends on BRIDGE
+	depends on NET_SWITCHDEV
+	select XY1000_PDMA
+	help
+	  This driver supports the FSL91030M L2 switch fabric used on the
+	  Milk-V Vega board. It exposes bridge membership, bridge port-state,
+	  and bridge ageing through standard Linux bridge and switchdev
+	  interfaces. Ageing time zero disables hardware ageing; positive bridge
+	  clock ticks are rounded up to the hardware's whole-second granularity
+	  and clamped to the verified 1..3600 second range.
+
+	  The driver binds to the Milk-V Vega FSL91030M devicetree compatible
+	  string and creates Linux-visible netdev control ports for the
+	  supported board datapath.
+
+config XY1000_PDMA
+	tristate "FisiLink XY1000 packet-DMA host interface"
+	depends on HAS_IOMEM
+	depends on OF
+	help
+	  This driver supports the packet-DMA host interface used on the
+	  Milk-V Vega board. It exposes a normal Linux Ethernet netdev for
+	  packets that the switch fabric explicitly steers to the CPU packet
+	  path.
+
+	  The driver owns only the packet-DMA MMIO block, IRQs, DMA buffers,
+	  and the private packet header. It does not program FSL91030M switch
+	  fabric tables or enable a CPU port by itself.
+
+endif # NET_VENDOR_FISILINK

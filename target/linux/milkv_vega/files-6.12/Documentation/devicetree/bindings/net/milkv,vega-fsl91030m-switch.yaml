@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/milkv,vega-fsl91030m-switch.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: FisiLink FSL91030M Ethernet switch fabric
+
+maintainers:
+  - OpenWrt Developers <openwrt-devel@lists.openwrt.org>
+
+description:
+  The FSL91030M switch fabric provides the L2 forwarding core used on the
+  Milk-V Vega board.  The Linux driver exposes the supported control plane
+  through bridge and switchdev netdev interfaces.
+
+properties:
+  $nodename:
+    pattern: "^switch(@.*)?$"
+
+  compatible:
+    const: milkv,vega-fsl91030m-switch
+
+  reg:
+    items:
+      - description: CPU-direct switch MMIO window
+      - description: SoC DMA register window used for switch table access
+      - description: DMA scratch window used for switch table access
+    description:
+      The switch window is the Milk-V Vega switch/TDMA aperture at
+      0x60000000.  The dma-scratch window must be at least 0x1000 bytes and
+      8-byte aligned.
+
+  reg-names:
+    items:
+      - const: switch
+      - const: dma
+      - const: dma-scratch
+
+required:
+  - compatible
+  - reg
+  - reg-names
+
+additionalProperties: false
+
+examples:
+  - |
+    soc {
+        #address-cells = <2>;
+        #size-cells = <2>;
+
+        switch@60000000 {
+            compatible = "milkv,vega-fsl91030m-switch";
+            reg = <0x0 0x60000000 0x0 0x07100000>,
+                  <0x0 0x10017000 0x0 0x1000>,
+                  <0x0 0x40010000 0x0 0x1000>;
+            reg-names = "switch", "dma", "dma-scratch";
+        };
+    };

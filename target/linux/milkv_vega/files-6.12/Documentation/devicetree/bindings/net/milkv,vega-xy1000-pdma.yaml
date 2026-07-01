@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/milkv,vega-xy1000-pdma.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: FisiLink XY1000 packet-DMA host interface
+
+maintainers:
+  - OpenWrt Developers <openwrt-devel@lists.openwrt.org>
+
+description:
+  The XY1000 packet-DMA block moves Ethernet frames between the host CPU and
+  the FSL91030M switch fabric through an 8-byte private packet header. It does
+  not configure switch-fabric forwarding policy; the switch fabric driver owns
+  CPU-port admission and egress rules.
+
+properties:
+  $nodename:
+    pattern: "^packet-dma(@.*)?$"
+
+  compatible:
+    const: milkv,vega-xy1000-pdma
+
+  reg:
+    items:
+      - description: Packet-DMA MMIO register window.
+      - description: Fixed packet scratch buffer window.
+
+  reg-names:
+    items:
+      - const: regs
+      - const: buffer
+
+  interrupts:
+    minItems: 3
+    maxItems: 3
+    description: TX completion, RX completion, and RX request interrupts.
+
+  interrupt-names:
+    items:
+      - const: tx-end
+      - const: rx-end
+      - const: rx-req
+
+  local-mac-address: true
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - interrupts
+  - interrupt-names
+
+additionalProperties: false
+
+examples:
+  - |
+    packet-dma@67800000 {
+        compatible = "milkv,vega-xy1000-pdma";
+        reg = <0x0 0x67800000 0x0 0x1000>,
+              <0x0 0x40000000 0x0 0x8000>;
+        reg-names = "regs", "buffer";
+        interrupt-parent = <&plic0>;
+        interrupts = <10>, <11>, <12>;
+        interrupt-names = "tx-end", "rx-end", "rx-req";
+        local-mac-address = [00 02 a3 f2 10 00];
+    };
