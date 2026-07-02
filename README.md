@@ -1,8 +1,12 @@
 # OpenWrt port for Milk-V Vega
 
 OpenWrt target port for the **Milk-V Vega**, a 14-port RISC-V switch SBC.
-Currently booting OpenWrt works, and the overlay carries the verified
-FSL91030M production switchdev driver for the scoped G5/G12 datapath.
+Boots OpenWrt and carries the FSL91030M switchdev driver: L2 bridge
+forwarding, per-port QoS (RED / ETS), and a VID1107 CTAG bridge-VLAN
+service — all across the copper ports **G5–G12**. The register recipes are
+packet-proven on G5/G12 (used as the two connected test ports); the other
+copper ports run the same recipes and are accepted by the driver but are not
+individually packet-validated yet.
 
 ## Hardware summary
 
@@ -47,11 +51,6 @@ The SPL copy also lives at `package/boot/vega-spl/src/milkv-vega.dts`.
 Lives in the SPL package because the SPL incbins the DTB and hands it to
 OpenSBI → U-Boot → Linux. Notable bits:
 
-- `/chosen/rng-seed` — 256-bit bootstrap entropy seed. UX608 has no Zkr
-  extension and idle IRQ rate is too low to organically seed the kernel
-  RNG before procd's `ubusd` tries `getrandom()`. Linux 6.12 defaults
-  `random.trust_bootloader=true`, so the seed marks the pool initialized
-  immediately at boot. Replaced by per-device randomness after first boot.
 - 32 PLIC IRQs declared on the SiFive GPIO node — the upstream
   `gpio-sifive` driver derives line count from declared parent-IRQ count
   (one IRQ per GPIO line, matching SiFive HiFive Unleashed). Vega's
@@ -61,12 +60,22 @@ OpenSBI → U-Boot → Linux. Notable bits:
 
 ### Userspace
 
-- `target/linux/milkv_vega/base-files/` — standard OpenWrt
-  per-target overlay
+- `target/linux/milkv_vega/base-files/` — standard OpenWrt per-target overlay.
+- `base-files/lib/preinit/69_milkv_vega_early_urngd` — **boot-entropy fix.**
+  This SoC has no hardware RNG and seeds the kernel pool very slowly, so
+  `procd`/`ubusd` blocks in `getrandom()` at "procd: - ubus -". The hook runs
+  OpenWrt's jitter RNG (`urngd`) during preinit and waits for the CRNG to be
+  ready before continuing. It **must** be numbered below 70: `70_initramfs_test`
+  breaks out of the `preinit_main` loop when `$INITRAMFS` is set, so a higher
+  number would be skipped in the RAM-root recovery image (which is exactly where
+  the stall bites hardest).
 
 ## Documentation
 
-- `docs/FLASHING.md` — how to write the three images to NOR/NAND
+- `docs/INSTALL.md` — **start here.** Install OpenWrt on a stock (vendor) board
+  over the network, and update it afterwards. The tester-facing guide.
+- `docs/FLASHING.md` — low-level image/offset/erase reference (NOR/NAND, JTAG)
+- `docs/SELF_FLASH.md` — in-system update details (`sysupgrade`, `mtd`)
 - `docs/DRIVER_SURFACE.md` — Linux-facing driver API and production test
   boundary
 - `docs/HOST_CPU_PATH.md` — verified packet-DMA versus switch-fabric CPU-port

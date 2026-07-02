@@ -329,12 +329,12 @@ index 0000000000..e120b6e397
 +				#size-cells = <1>;
 +
 +				partition@0 {
-+					reg = <0x00000000 0x00800000>;
++					reg = <0x00000000 0x00c00000>;
 +					label = "kernel_nand";
 +				};
 +
-+				partition@800000 {
-+					reg = <0x00800000 0x07800000>;
++				partition@c00000 {
++					reg = <0x00c00000 0x07400000>;
 +					label = "ubifs_nand";
 +				};
 +			};
@@ -514,7 +514,7 @@ new file mode 100644
 index 0000000000..1a199603e4
 --- /dev/null
 +++ b/configs/milkv_vega_defconfig
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,22 @@
 +CONFIG_RISCV=y
 +CONFIG_SYS_MALLOC_LEN=0x800000
 +CONFIG_NR_DRAM_BANKS=1
@@ -530,7 +530,9 @@ index 0000000000..1a199603e4
 +CONFIG_AUTOBOOT_PROMPT="Press 'asd' to abort autoboot in %d seconds\n"
 +CONFIG_AUTOBOOT_STOP_STR="asd"
 +CONFIG_USE_BOOTCOMMAND=y
-+CONFIG_BOOTCOMMAND="mtd list && mtd read kernel_nand 0x42000000 0 0x600000 && bootm 0x42000000 - ${fdtcontroladdr}"
++CONFIG_CMD_SETEXPR=y
++CONFIG_SYS_BOOTM_LEN=0x2000000
++CONFIG_BOOTCOMMAND="mtd list && mtd read kernel_nand 0x42000000 0 0x1000 && setexpr.b k0 *0x4200000c && setexpr.b k1 *0x4200000d && setexpr.b k2 *0x4200000e && setexpr.b k3 *0x4200000f && setexpr sz ${k0} * 0x1000000 && setexpr t ${k1} * 0x10000 && setexpr sz ${sz} + ${t} && setexpr t ${k2} * 0x100 && setexpr sz ${sz} + ${t} && setexpr sz ${sz} + ${k3} && setexpr len ${sz} + 0x40 && mtd read kernel_nand 0x42000000 0 ${len} && bootm 0x42000000 - ${fdtcontroladdr}"
 +# CONFIG_CMD_BOOTI is not set
 +# CONFIG_CMD_SF is not set
 +# CONFIG_SPI_FLASH is not set

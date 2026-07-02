@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Packet-proven CTAG bridge VLAN support for the Milk-V Vega G5/G12 datapath.
- *
- * The verified production surface is intentionally narrow: tagged VID1107
- * membership on lports 6 and 13, INET ingress VLAN filtering on those ports,
- * and per-egress CTAG stripping through the EPF out-port un_ctag bit.
- * PVID/untagged ingress and arbitrary VID/FID mappings are not exposed here.
+ * CTAG bridge VLAN support (single service VID 1107) for the Milk-V Vega copper
+ * datapath. The offload covers any subset of the copper ports G5..G12: tagged
+ * VID1107 membership, INET ingress VLAN filtering on the member ports, and
+ * per-egress CTAG stripping through the EPF out-port un_ctag bit. The register
+ * recipe is packet-proven on G5/G12 (their IVT translation hash slots are
+ * cross-checked against known-good values, 4 and 21); the other copper ports
+ * use the same recipe with their hash slot computed from the shared CRC.
+ * PVID/untagged ingress and arbitrary VID/FID mappings are still not exposed.
  */
 #include <linux/build_bug.h>
 #include <linux/device.h>
@@ -37,13 +39,8 @@ static const struct fsl91030m_ivt_xlate_bank fsl91030m_ivt_xlate_banks[] = {
 	{ FSL_IVT_XKEY_RIGHT3_SRM, FSL_IVT_XLATE_RIGHT3_SRM },
 };
 
-static const u8 fsl91030m_ctag_lports[FSL91030M_CTAG_ROW_COUNT] = {
-	FSL91030M_VEGA_G5_LPORT,
-	FSL91030M_VEGA_G12_LPORT,
-};
-
-static_assert(FSL91030M_CTAG_ROW_COUNT == 2,
-	      "VID1107 service is verified only for G5/G12");
+static_assert(FSL91030M_CTAG_ROW_COUNT == FSL91030M_VEGA_PORT_COUNT,
+	      "VID1107 service covers every copper port");
 static_assert(FSL_INET_VLAN_SRM +
 	      FSL91030M_CTAG_SERVICE_VID * FSL_INET_VLAN_SRM_STRIDE +
 	      FSL_INET_VLAN_SRM_WORDS * sizeof(u32) <=
@@ -184,6 +181,12 @@ static u32 fsl91030m_ivt_xlate0_index(const u32 key[2])
 	return fsl91030m_crc_hash96(0, shifted) & 0x7f;
 }
 
+/*
+ * G5/G12 have packet-verified IVT translation hash slots; return them so the
+ * caller can cross-check the software CRC against known-good hardware values.
+ * Any other copper port returns -ENOENT: no anchor, so the computed hash slot
+ * is trusted. Non-copper lports are rejected.
+ */
 static int fsl91030m_ivt_xlate0_expected_idx(u8 lport, unsigned int *idx)
 {
 	switch (lport) {
@@ -194,7 +197,7 @@ static int fsl91030m_ivt_xlate0_expected_idx(u8 lport, unsigned int *idx)
 		*idx = 21;
 		return 0;
 	default:
-		return -EINVAL;
+		return fsl91030m_port_lport_supported(lport) ? -ENOENT : -EINVAL;
 	}
 }
 
@@ -242,10 +245,10 @@ fsl91030m_vlan_ctag_pick_ivt_slot(struct fsl91030m *sw, u8 lport,
 				      key);
 	fsl91030m_ivt_xlate0_action(FSL91030M_CTAG_SERVICE_VID, action);
 	ret = fsl91030m_ivt_xlate0_expected_idx(lport, &expected_idx);
-	if (ret)
+	if (ret && ret != -ENOENT)
 		return ret;
 	idx = fsl91030m_ivt_xlate0_index(key);
-	if (idx != expected_idx)
+	if (ret == 0 && idx != expected_idx)
 		return -EINVAL;
 
 	for (i = 0; i < ARRAY_SIZE(fsl91030m_ivt_xlate_banks); i++) {
@@ -316,7 +319,7 @@ fsl91030m_vlan_ctag_restore_saved(struct fsl91030m *sw,
 	int ret = 0;
 	int rb_ret;
 
-	for (i = 0; i < FSL91030M_CTAG_ROW_COUNT; i++) {
+	for (i = 0; i < saved->n_members; i++) {
 		const struct fsl91030m_vlan_ctag_ivt_saved *ivt = &saved->ivt[i];
 		const struct fsl91030m_ivt_xlate_bank *bank;
 		u32 action_off;
@@ -371,8 +374,8 @@ fsl91030m_vlan_ctag_restore_saved(struct fsl91030m *sw,
 	if (rb_ret && !ret)
 		ret = rb_ret;
 
-	for (i = 0; i < FSL91030M_CTAG_ROW_COUNT; i++) {
-		u8 lport = fsl91030m_ctag_lports[i];
+	for (i = 0; i < saved->n_members; i++) {
+		u8 lport = saved->members[i];
 
 		rb_ret = fsl91030m_table_restore_exact(sw,
 						       fsl91030m_eee_port_off(lport),
@@ -388,8 +391,8 @@ fsl91030m_vlan_ctag_restore_saved(struct fsl91030m *sw,
 	if (rb_ret && !ret)
 		ret = rb_ret;
 
-	for (i = 0; i < FSL91030M_CTAG_ROW_COUNT; i++) {
-		u8 lport = fsl91030m_ctag_lports[i];
+	for (i = 0; i < saved->n_members; i++) {
+		u8 lport = saved->members[i];
 
 		rb_ret = fsl91030m_table_restore_exact(sw,
 						       fsl91030m_inet_port_off(lport),
@@ -402,7 +405,9 @@ fsl91030m_vlan_ctag_restore_saved(struct fsl91030m *sw,
 	return ret;
 }
 
-static int fsl91030m_vlan_ctag_apply(struct fsl91030m *sw)
+static int fsl91030m_vlan_ctag_apply(struct fsl91030m *sw, const u8 *members,
+				     unsigned int n_members, u16 member_mask,
+				     u16 untagged_mask)
 {
 	static const u32 inet_vlan[FSL_INET_VLAN_SRM_WORDS] = {
 		0x00000001u, 0x00010200u, 0x00000000u,
@@ -426,8 +431,14 @@ static int fsl91030m_vlan_ctag_apply(struct fsl91030m *sw)
 
 	if (sw->vlan1107.active)
 		return -EBUSY;
+	if (n_members < 2 || n_members > FSL91030M_VLAN_CTAGSVC_PORTS)
+		return -EINVAL;
 
 	saved.active = true;
+	saved.n_members = n_members;
+	saved.member_mask = member_mask;
+	saved.untagged_mask = untagged_mask;
+	memcpy(saved.members, members, n_members);
 	inet_off = fsl91030m_inet_vlan_off(FSL91030M_CTAG_SERVICE_VID);
 	eee_op_off = fsl91030m_eee_vlan_op_off(FSL91030M_CTAG_SERVICE_OP_IDX);
 
@@ -446,8 +457,8 @@ static int fsl91030m_vlan_ctag_apply(struct fsl91030m *sw)
 	if (ret)
 		return ret;
 
-	for (i = 0; i < FSL91030M_CTAG_ROW_COUNT; i++) {
-		u8 lport = fsl91030m_ctag_lports[i];
+	for (i = 0; i < n_members; i++) {
+		u8 lport = members[i];
 
 		ret = fsl91030m_table_read(sw, fsl91030m_inet_port_off(lport),
 					   saved.inet_port[i],
@@ -472,8 +483,8 @@ static int fsl91030m_vlan_ctag_apply(struct fsl91030m *sw)
 	if (ret)
 		goto rollback;
 
-	for (i = 0; i < FSL91030M_CTAG_ROW_COUNT; i++) {
-		u8 lport = fsl91030m_ctag_lports[i];
+	for (i = 0; i < n_members; i++) {
+		u8 lport = members[i];
 
 		ret = fsl91030m_table_write_verify_exact(sw,
 							 fsl91030m_eee_port_off(lport),
@@ -494,7 +505,7 @@ static int fsl91030m_vlan_ctag_apply(struct fsl91030m *sw)
 	if (ret)
 		goto rollback;
 
-	for (i = 0; i < FSL91030M_CTAG_ROW_COUNT; i++) {
+	for (i = 0; i < n_members; i++) {
 		struct fsl91030m_vlan_ctag_ivt_saved *ivt = &saved.ivt[i];
 		const struct fsl91030m_ivt_xlate_bank *bank;
 		u32 port_row[FSL_IVT_PORT_SRM_WORDS];
@@ -530,8 +541,8 @@ static int fsl91030m_vlan_ctag_apply(struct fsl91030m *sw)
 			goto rollback;
 	}
 
-	for (i = 0; i < FSL91030M_CTAG_ROW_COUNT; i++) {
-		u8 lport = fsl91030m_ctag_lports[i];
+	for (i = 0; i < n_members; i++) {
+		u8 lport = members[i];
 		u32 port_row[FSL_INET_PORT_SRM_WORDS];
 
 		memcpy(port_row, saved.inet_port[i], sizeof(port_row));
@@ -604,48 +615,66 @@ fsl91030m_vlan_epf_out_un_ctag_set(struct fsl91030m *sw, u8 lport, bool enable)
 						  ARRAY_SIZE(row));
 }
 
-int fsl91030m_l2_vlan1107_set(struct fsl91030m *sw, bool g5_member,
-			      bool g5_untagged, bool g12_member,
-			      bool g12_untagged)
+int fsl91030m_l2_vlan1107_set(struct fsl91030m *sw, unsigned int member_mask,
+			      unsigned int untagged_mask)
 {
+	const unsigned int copper_mask = GENMASK(FSL91030M_VEGA_PORT_COUNT - 1, 0);
+	u8 members[FSL91030M_VLAN_CTAGSVC_PORTS];
+	unsigned int n_members = 0;
+	unsigned int i;
 	bool want_active;
 	int ret = 0;
 
 	if (!sw || !sw->dev || !sw->full)
 		return -ENODEV;
 
-	want_active = g5_member && g12_member;
+	member_mask &= copper_mask;
+	untagged_mask &= member_mask;
+
+	for (i = 0; i < FSL91030M_VEGA_PORT_COUNT; i++)
+		if (member_mask & BIT(i))
+			members[n_members++] = FSL91030M_VEGA_G5_LPORT + i;
+
+	/* A VLAN forwards only with at least two member ports. */
+	want_active = n_members >= 2;
 
 	mutex_lock(&sw->op_lock);
 
-	if (want_active && !sw->vlan1107.active) {
-		ret = fsl91030m_vlan_ctag_apply(sw);
-		if (ret)
-			goto out_unlock;
-	} else if (!want_active && sw->vlan1107.active) {
-		ret = fsl91030m_vlan_epf_out_un_ctag_set(sw,
-							 FSL91030M_VEGA_G5_LPORT,
-							 false);
-		if (ret)
-			goto out_unlock;
-		ret = fsl91030m_vlan_epf_out_un_ctag_set(sw,
-							 FSL91030M_VEGA_G12_LPORT,
-							 false);
-		if (ret)
-			goto out_unlock;
+	/*
+	 * Reconcile against the applied state. Any change to the member set or
+	 * the untagged (egress-strip) set is handled by tearing the service down
+	 * and re-applying it, which keeps the save/restore bookkeeping simple.
+	 */
+	if (sw->vlan1107.active &&
+	    (sw->vlan1107.member_mask != member_mask ||
+	     sw->vlan1107.untagged_mask != untagged_mask)) {
+		for (i = 0; i < sw->vlan1107.n_members; i++) {
+			ret = fsl91030m_vlan_epf_out_un_ctag_set(sw,
+						sw->vlan1107.members[i], false);
+			if (ret)
+				goto out_unlock;
+		}
 		ret = fsl91030m_vlan_ctag_restore(sw);
-		goto out_unlock;
+		if (ret)
+			goto out_unlock;
 	}
 
-	if (!want_active)
+	if (!want_active || sw->vlan1107.active)
 		goto out_unlock;
 
-	ret = fsl91030m_vlan_epf_out_un_ctag_set(sw, FSL91030M_VEGA_G5_LPORT,
-						 g5_untagged);
+	ret = fsl91030m_vlan_ctag_apply(sw, members, n_members,
+					member_mask, untagged_mask);
 	if (ret)
 		goto out_unlock;
-	ret = fsl91030m_vlan_epf_out_un_ctag_set(sw, FSL91030M_VEGA_G12_LPORT,
-						 g12_untagged);
+
+	for (i = 0; i < n_members; i++) {
+		bool untag = untagged_mask &
+			     BIT(members[i] - FSL91030M_VEGA_G5_LPORT);
+
+		ret = fsl91030m_vlan_epf_out_un_ctag_set(sw, members[i], untag);
+		if (ret)
+			goto out_unlock;
+	}
 
 out_unlock:
 	mutex_unlock(&sw->op_lock);

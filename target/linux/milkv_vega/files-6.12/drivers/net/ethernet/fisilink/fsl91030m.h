@@ -46,7 +46,8 @@ enum {
 	FSL91030M_VEGA_PORT_COUNT,
 };
 
-#define FSL91030M_VLAN_CTAGSVC_PORTS 2u
+/* VID1107 CTAG service can be offloaded on any subset of the copper ports. */
+#define FSL91030M_VLAN_CTAGSVC_PORTS FSL91030M_VEGA_PORT_COUNT
 #define FSL91030M_CTAG_SERVICE_VID 1107u
 
 #define FSL91030M_VEGA_G5_MAC		16u
@@ -95,6 +96,10 @@ struct fsl91030m_vlan_ctag_ivt_saved {
 
 struct fsl91030m_vlan_ctag_saved {
 	bool active;
+	u8 n_members;
+	u8 members[FSL91030M_VLAN_CTAGSVC_PORTS];
+	u16 member_mask;
+	u16 untagged_mask;
 	u32 inet_vlan[FSL_INET_VLAN_SRM_WORDS];
 	u32 inet_port[FSL91030M_VLAN_CTAGSVC_PORTS][FSL_INET_PORT_SRM_WORDS];
 	u32 eee_vlan_op[FSL_EEE_VLAN_OP_SRM_WORDS];
@@ -173,9 +178,15 @@ int __must_check fsl91030m_l2_cpu_broadcast_trap_set(struct fsl91030m *sw,
 						     bool enable);
 int __must_check fsl91030m_l2_cpu_local_mac_set(struct fsl91030m *sw,
 						const u8 *mac, bool enable);
+/*
+ * Program the VID1107 CTAG service across the copper ports named in
+ * @member_mask (bit i == copper port i, lport FSL91030M_VEGA_G5_LPORT + i);
+ * @untagged_mask (a subset of @member_mask) selects per-egress CTAG stripping.
+ * The offload activates once at least two ports are members.
+ */
 int __must_check fsl91030m_l2_vlan1107_set(struct fsl91030m *sw,
-					   bool g5_member, bool g5_untagged,
-					   bool g12_member, bool g12_untagged);
+					   unsigned int member_mask,
+					   unsigned int untagged_mask);
 int __must_check fsl91030m_port_hw_stats_read(struct fsl91030m *sw,
 					      const struct fsl91030m_port_desc *desc,
 					      struct rtnl_link_stats64 *stats);

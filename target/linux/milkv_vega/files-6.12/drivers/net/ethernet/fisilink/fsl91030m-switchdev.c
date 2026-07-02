@@ -784,19 +784,33 @@ static int fsl91030m_swdev_ageing_time_set(struct fsl91030m_switchdev *sd,
 						  extack);
 }
 
+static bool
+fsl91030m_swdev_port_vlan1107_capable(const struct fsl91030m_swdev_port *port);
+
 static int fsl91030m_swdev_vlan1107_sync(struct fsl91030m_switchdev *sd)
 {
-	struct fsl91030m_swdev_port *g5 = sd->ports[FSL91030M_VEGA_PORT_G5];
-	struct fsl91030m_swdev_port *g12 = sd->ports[FSL91030M_VEGA_PORT_G12];
 	bool filter = READ_ONCE(sd->vlan_filtering);
+	unsigned int member_mask = 0;
+	unsigned int untagged_mask = 0;
+	unsigned int i;
 
-	if (!g5 || !g12)
-		return -ENODEV;
+	for (i = 0; i < FSL91030M_SWDEV_NPORTS; i++) {
+		struct fsl91030m_swdev_port *port = sd->ports[i];
+		unsigned int bit;
 
-	return fsl91030m_l2_vlan1107_set(sd->sw, filter && g5->vlan1107,
-					 g5->vlan1107_untagged,
-					 filter && g12->vlan1107,
-					 g12->vlan1107_untagged);
+		if (!port || !port->desc ||
+		    !fsl91030m_swdev_port_vlan1107_capable(port))
+			continue;
+		if (!filter || !port->vlan1107)
+			continue;
+
+		bit = BIT(port->desc->lport - FSL91030M_VEGA_G5_LPORT);
+		member_mask |= bit;
+		if (port->vlan1107_untagged)
+			untagged_mask |= bit;
+	}
+
+	return fsl91030m_l2_vlan1107_set(sd->sw, member_mask, untagged_mask);
 }
 
 static bool
@@ -808,8 +822,7 @@ fsl91030m_swdev_port_vlan1107_capable(const struct fsl91030m_swdev_port *port)
 		return false;
 
 	lport = port->desc->lport;
-	return lport == FSL91030M_VEGA_G5_LPORT ||
-	       lport == FSL91030M_VEGA_G12_LPORT;
+	return fsl91030m_port_lport_supported(lport);
 }
 
 static bool
@@ -860,7 +873,7 @@ fsl91030m_swdev_vlan_filtering_set(struct fsl91030m_switchdev *sd,
 	if (vlan_filtering &&
 	    !fsl91030m_swdev_vlan_filtering_ports_capable(sd)) {
 		NL_SET_ERR_MSG_MOD(extack,
-				   "VLAN filtering is verified only when bridged RJ45 members are G5/G12");
+				   "VLAN filtering is only supported when all bridged members are copper ports (G5-G12)");
 		return -EOPNOTSUPP;
 	}
 
@@ -894,7 +907,7 @@ fsl91030m_swdev_vlan_add(struct fsl91030m_swdev_port *port,
 			return -EOPNOTSUPP;
 
 		NL_SET_ERR_MSG_MOD(extack,
-				   "VID1107 offload is verified only on G5/G12");
+				   "VID1107 offload is only supported on copper ports (G5-G12)");
 		return -EINVAL;
 	}
 
@@ -1355,7 +1368,7 @@ fsl91030m_swdev_bridge_join_validate(struct fsl91030m_swdev_port *port,
 	if (READ_ONCE(sd->vlan_filtering) &&
 	    !fsl91030m_swdev_port_vlan1107_capable(port)) {
 		NL_SET_ERR_MSG_MOD(extack,
-				   "VLAN-filtered bridges are verified only on G5/G12");
+				   "VLAN-filtered bridges are only supported on copper ports (G5-G12)");
 		return -EOPNOTSUPP;
 	}
 

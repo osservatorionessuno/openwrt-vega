@@ -241,12 +241,12 @@ root=ubi0:rootfs rootfstype=ubifs rootwait rw"
 				#size-cells = <1>;
 
 				partition@0 {
-					reg = <0x00000000 0x00800000>;
+					reg = <0x00000000 0x00c00000>;
 					label = "kernel_nand";
 				};
 
-				partition@800000 {
-					reg = <0x00800000 0x07800000>;
+				partition@c00000 {
+					reg = <0x00c00000 0x07400000>;
 					label = "ubifs_nand";
 				};
 			};

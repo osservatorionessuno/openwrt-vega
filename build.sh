@@ -59,6 +59,9 @@ CONFIG_PACKAGE_kmod-sched=y
 CONFIG_PACKAGE_kmod-sched-red=y
 CONFIG_PACKAGE_libi2c=y
 CONFIG_PACKAGE_i2c-tools=y
+# Recovery initramfs (RAM-root image) for in-system reflash of the mounted rootfs.
+CONFIG_TARGET_ROOTFS_INITRAMFS=y
+CONFIG_TARGET_INITRAMFS_COMPRESSION_XZ=y
 EOF
 make defconfig
 
