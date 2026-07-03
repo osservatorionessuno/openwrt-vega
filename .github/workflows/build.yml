@@ -50,9 +50,15 @@ jobs:
       - name: Stage artifacts
         run: |
           mkdir -p artifacts
-          cp vega-port/openwrt/bin/targets/milkv_vega/milkv_vega/vega-spl.bin                            artifacts/
-          cp vega-port/openwrt/bin/targets/milkv_vega/milkv_vega/openwrt-milkv_vega-*-ubifs-kernel.bin   artifacts/
-          cp vega-port/openwrt/bin/targets/milkv_vega/milkv_vega/openwrt-milkv_vega-*-ubifs-rootfs.ubi   artifacts/
+          IMG=vega-port/openwrt/bin/targets/milkv_vega/milkv_vega
+          ls -la "$IMG"
+          # JTAG / low-level flashing
+          cp "$IMG"/vega-spl.bin                              artifacts/
+          cp "$IMG"/openwrt-milkv_vega-*-ubifs-kernel.bin     artifacts/
+          cp "$IMG"/openwrt-milkv_vega-*-ubifs-rootfs.ubi     artifacts/
+          # network install (docs/INSTALL.md): recovery initramfs + full sysupgrade image
+          cp "$IMG"/openwrt-milkv_vega-*-initramfs-uImage     artifacts/
+          cp "$IMG"/openwrt-milkv_vega-*-ubifs-sysupgrade.bin artifacts/
           ls -la artifacts/
           cd artifacts && sha256sum * > SHA256SUMS && cat SHA256SUMS
 
