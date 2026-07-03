@@ -4,6 +4,13 @@
 . /lib/functions/uci-defaults.sh
 
 board_config_update
+
+case "$(board_name)" in
+milkv,vega)
+	ucidef_set_interface_lan "g5 g6 g7 g8 g9 g10 g11 g12"
+	;;
+esac
+
 board_config_flush
 
 exit 0

@@ -9,7 +9,8 @@ define Device/Default
 	KERNEL_NAME := Image
 	KERNEL := kernel-bin | gzip | uImage gzip
 	KERNEL_SUFFIX := -uImage
-	IMAGES := kernel.bin rootfs.ubi
+	IMAGES := sysupgrade.bin kernel.bin rootfs.ubi
+	IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
 	IMAGE/kernel.bin := append-kernel
 	IMAGE/rootfs.ubi := append-ubi
 endef
@@ -19,7 +20,9 @@ define Device/milkv_vega
 	DEVICE_VENDOR := Milk-V
 	DEVICE_MODEL := Vega
 	DEVICE_DTS := fisilink/milkv-vega
-	SUPPORTED_DEVICES := milkv,vega fisilink,fsl91030m
+	DEVICE_PACKAGES := ip-bridge kmod-fsl91030m-switch kmod-xy1000-pdma
+	SUPPORTED_DEVICES := milkv,vega
+	KERNEL_SIZE := 12288k
 	BLOCKSIZE := 128k
 	PAGESIZE := 2048
 	SUBPAGESIZE := 2048

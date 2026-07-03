@@ -1,0 +1,10 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# The Vega target has no verified Linux-visible failsafe button or preinit
+# Ethernet interface.  Its single serial console can stall in the generic
+# key-wait path, so keep production boots unattended.
+
+failsafe_wait() {
+	:
+}

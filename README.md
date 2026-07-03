@@ -1,8 +1,12 @@
 # OpenWrt port for Milk-V Vega
 
-OpenWrt target port for the **Milk-V Vega** a 14-port RISC-V switch SBC.
-Currently booting OpenWrt works, and is stable. However there's no switch
-driver, though there's one network interface available for management.
+OpenWrt target port for the **Milk-V Vega**, a 14-port RISC-V switch SBC.
+Boots OpenWrt and carries the FSL91030M switchdev driver: L2 bridge
+forwarding, per-port QoS (RED / ETS), and a VID1107 CTAG bridge-VLAN
+service — all across the copper ports **G5–G12**. The register recipes are
+packet-proven on G5/G12 (used as the two connected test ports); the other
+copper ports run the same recipes and are accepted by the driver but are not
+individually packet-validated yet.
 
 ## Hardware summary
 
@@ -24,33 +28,8 @@ driver, though there's one network interface available for management.
 Clones OpenWrt at a known-good commit, overlays this repo's files, and runs
 `make`. Output goes to `openwrt/bin/targets/milkv_vega/milkv_vega/`.
 
-## Flashing and recovery
-
-This repo carries the JTAG flashing kit under `scripts/flashing/vega/`. It
-clones the Nuclei `riscv-openocd` fork, applies the Vega patches, builds
-OpenOCD, and provides scripts for NOR SPL recovery and NAND kernel/rootfs
-flashing.
-
-```sh
-./scripts/flashing/vega/bootstrap.sh
-
-OUT=openwrt/bin/targets/milkv_vega/milkv_vega
-./scripts/flashing/vega/flash.sh nor "$OUT/vega-spl.bin"
-./scripts/flashing/vega/flash.sh nand kernel "$OUT/openwrt-milkv_vega-milkv_vega-milkv_vega-ubifs-kernel.bin"
-./scripts/flashing/vega/flash.sh nand rootfs "$OUT/openwrt-milkv_vega-milkv_vega-milkv_vega-ubifs-rootfs.ubi"
-```
-
-Explicit OpenOCD environment form:
-
-```sh
-OPENOCD=$PWD/scripts/flashing/vega/riscv-openocd/src/openocd \
-OPENOCD_CFG=$PWD/scripts/flashing/vega/riscv-openocd/openocd-slow.cfg \
-./scripts/flashing/vega/flash.sh nor /path/to/vega-spl.bin
-```
-
-For a blank or bricked board, power-cycle, flash `vega-spl.bin` to NOR first,
-power-cycle again, then flash the NAND kernel and rootfs. See
-`docs/FLASHING.md` for backup, UART, and recovery notes.
+The default build config also selects LuCI and the i2c tooling used for board
+bring-up.
 
 ## What this port carries
 
@@ -60,19 +39,18 @@ power-cycle again, then flash the NAND kernel and rootfs. See
 |---|---|
 | `001-riscv-dts-add-fisilink-subdir.patch`  | Adds `arch/riscv/boot/dts/fisilink/` to the DT include path so the kernel DTB build sees our DTS |
 | `200-riscv-disable-asid-allocator.patch`    | Disables the ASID allocator on this SoC. The mainline ASID allocator (commit `65d4b9c53017`, Linux v5.12) probes SATP for ASID bits and trusts the result, but UX608 retains writes to the ASID field while its TLB doesn't actually distinguish by ASID. This causes silent memory corruption across context switches — manifests as SIGSEGV after `wait4()` returns in user space. See `docs/ASID_BUG.md`. |
-| `210-add-xy1000-net-driver.patch`           | Adds the vendor `xy1000_net.c` (Fisilink MAC driver) to the kernel build. Source file lives under `files-6.12/drivers/net/ethernet/xy1000/`. Minor 6.12 API touch-ups applied (return types, `eth_hw_addr_set`, `static`/`__maybe_unused`). |
+| `210-add-fisilink-net-drivers.patch`        | Hooks the FisiLink Ethernet directory, supplied through `files-6.12`, into the kernel networking Kconfig and Makefile. The current target config packages only the production `fsl91030m` switchdev driver as `kmod-fsl91030m-switch`; the old `xy1000_net` packet-DMA surface is intentionally absent. |
 
 
-### Device tree (`package/boot/vega-spl/src/milkv-vega.dts`)
+### Device tree
+
+The kernel DTB source lives under
+`target/linux/milkv_vega/files-6.12/arch/riscv/boot/dts/fisilink/`.
+The SPL copy also lives at `package/boot/vega-spl/src/milkv-vega.dts`.
 
 Lives in the SPL package because the SPL incbins the DTB and hands it to
 OpenSBI → U-Boot → Linux. Notable bits:
 
-- `/chosen/rng-seed` — 256-bit bootstrap entropy seed. UX608 has no Zkr
-  extension and idle IRQ rate is too low to organically seed the kernel
-  RNG before procd's `ubusd` tries `getrandom()`. Linux 6.12 defaults
-  `random.trust_bootloader=true`, so the seed marks the pool initialized
-  immediately at boot. Replaced by per-device randomness after first boot.
 - 32 PLIC IRQs declared on the SiFive GPIO node — the upstream
   `gpio-sifive` driver derives line count from declared parent-IRQ count
   (one IRQ per GPIO line, matching SiFive HiFive Unleashed). Vega's
@@ -82,29 +60,33 @@ OpenSBI → U-Boot → Linux. Notable bits:
 
 ### Userspace
 
-- `target/linux/milkv_vega/base-files/` — standard OpenWrt
-  per-target overlay
-
-### Flashing kit (`scripts/flashing/vega/`)
-
-- `bootstrap.sh` clones the pinned Nuclei OpenOCD fork, applies the
-  `scripts/flashing/vega/patches/` speed/recovery patches, builds OpenOCD, and
-  generates the NAND helper stubs.
-- `flash.sh` flashes the NOR SPL, NAND kernel, and NAND rootfs using
-  the patched OpenOCD.
-- `configs/openocd-board.cfg` contains the Vega FTDI/JTAG and slow-path NOR
-  flash configuration that `bootstrap.sh` installs as
-  `riscv-openocd/openocd-slow.cfg`.
+- `target/linux/milkv_vega/base-files/` — standard OpenWrt per-target overlay.
+- `base-files/lib/preinit/69_milkv_vega_early_urngd` — **boot-entropy fix.**
+  This SoC has no hardware RNG and seeds the kernel pool very slowly, so
+  `procd`/`ubusd` blocks in `getrandom()` at "procd: - ubus -". The hook runs
+  OpenWrt's jitter RNG (`urngd`) during preinit and waits for the CRNG to be
+  ready before continuing. It **must** be numbered below 70: `70_initramfs_test`
+  breaks out of the `preinit_main` loop when `$INITRAMFS` is set, so a higher
+  number would be skipped in the RAM-root recovery image (which is exactly where
+  the stall bites hardest).
 
 ## Documentation
 
-- `docs/FLASHING.md` — how to build the flasher, write the three images, and recover a board
+- `docs/INSTALL.md` — **start here.** Install OpenWrt on a stock (vendor) board
+  over the network, and update it afterwards. The tester-facing guide.
+- `docs/FLASHING.md` — low-level image/offset/erase reference (NOR/NAND, JTAG)
+- `docs/SELF_FLASH.md` — in-system update details (`sysupgrade`, `mtd`)
+- `docs/DRIVER_SURFACE.md` — Linux-facing driver API and production test
+  boundary
+- `docs/HOST_CPU_PATH.md` — verified packet-DMA versus switch-fabric CPU-port
+  findings for future LuCI/host-management work
+- `docs/BOOT_TIME.md` — NAND boot-read measurements and the deferred fast
+  raw-reader finding
 - `docs/ASID_BUG.md` — the silent memory corruption bug we bisected
 - `docs/LED_MAP.md` — empirical bit-to-LED map of the 32-output chain
 - `docs/HARDWARE.md` — what we know about the SoC and board
 
 ## License
 
-This port glue is whatever OpenWrt's terms are (GPL-2.0 for kernel pieces,
-package-specific for the rest). The vendor `xy1000_net.c` is `GPL` per
-its `MODULE_LICENSE`.
+This port glue follows OpenWrt's terms: GPL-2.0 for kernel pieces and
+package-specific licensing for the rest.

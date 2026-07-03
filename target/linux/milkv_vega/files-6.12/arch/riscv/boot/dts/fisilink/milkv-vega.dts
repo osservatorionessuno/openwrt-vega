@@ -6,14 +6,18 @@
 
 /dts-v1/;
 
+#define VEGA_BOOTARGS \
+	"earlycon=sbi console=ttySIF0,115200 no4lvl no5lvl ubi.mtd=ubifs_nand \
+root=ubi0:rootfs rootfstype=ubifs rootwait rw"
+
 / {
 	#address-cells = <2>;
 	#size-cells = <2>;
-	compatible = "milkv,vega", "fisilink,fsl91030m";
+	compatible = "milkv,vega";
 	model = "Milk-V Vega";
 
 	chosen {
-		bootargs = "earlycon=sbi console=ttySIF0,115200 no4lvl no5lvl ubi.mtd=ubifs_nand root=ubi0:rootfs rootfstype=ubifs rootwait rw";
+		bootargs = VEGA_BOOTARGS;
 		stdout-path = "serial0";
 	};
 
@@ -26,7 +30,7 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		timebase-frequency = <48828>;
-		
+
 		cpu0: cpu@0 {
 			device_type = "cpu";
 			reg = <0>;
@@ -44,7 +48,7 @@
 			riscv,satp-mode = "sv39";	/* force Sv39 (6.5+ supported) */
 			mmu-type = "riscv,sv39";
 			clock-frequency = <400000000>;
-		
+
 			cpu0_intc: interrupt-controller {
 				#interrupt-cells = <1>;
 				interrupt-controller;
@@ -71,8 +75,8 @@
 		clock-frequency = <200000000>;
 		clock-output-names = "hfclk";
 	};
- 
- 	hfclk2: hfclk2 {
+
+	hfclk2: hfclk2 {
 		#clock-cells = <0>;
 		compatible = "fixed-clock";
 		clock-frequency = <100000000>;
@@ -85,6 +89,7 @@
 
 	plic0: interrupt-controller@8000000 {
 		#interrupt-cells = <1>;
+		#address-cells = <0>;
 		compatible = "riscv,plic0";
 		interrupt-controller;
 		riscv,ndev = <53>;
@@ -158,7 +163,7 @@
 		clocks = <&hfclk2>;
 		status = "disabled";
 	};
-  
+
 	qspi0: spi@10014000 {
 		compatible = "sifive,spi0";
 		reg = <0x0 0x10014000 0x0 0x1000>;
@@ -172,35 +177,39 @@
 		status = "okay";
 
 		flash@1 {
+			/*
+			 * 4 MiB Winbond W25Q32 SPI NOR.  Geometry is autodetected
+			 * via SFDP/JEDEC ID, so no fixed flash_info compatible is
+			 * named.  The previous "micron,mt25ql512a" was a 64 MiB
+			 * part and did not match this board.
+			 */
 			compatible = "jedec,spi-nor";
 			reg = <1>;
 			spi-tx-bus-width = <1>;
 			spi-rx-bus-width = <1>;
-			spi-max-frequency = <50000000>;
+			spi-max-frequency = <25000000>;
 
 			partitions {
 				compatible = "fixed-partitions";
 				#address-cells = <1>;
 				#size-cells = <1>;
 
+				/*
+				 * First-stage SPL (OpenSBI + U-Boot + DTB + env),
+				 * executed in place from NOR at boot.
+				 */
 				partition@0 {
 					reg = <0x00000000 0x00100000>;
 					label = "freeloader";
 				};
 
+				/*
+				 * Remainder of the 4 MiB NOR.  Unused by OpenWrt:
+				 * the kernel and root filesystem live on NAND.
+				 */
 				partition@100000 {
-					reg = <0x00100000 0x00400000>;
-					label = "kernel_nor";
-				};
-
-				partition@500000 {
-					reg = <0x00500000 0x01400000>;
-					label = "ramfs_nor";
-				};
-
-				partition@1900000 {
-					reg = <0x01900000 0x00A00000>;
-					label = "jffs2_nor";
+					reg = <0x00100000 0x00300000>;
+					label = "nor-spare";
 				};
 			};
 		};
@@ -215,10 +224,10 @@
 		num-cs = <1>;
 		#address-cells = <1>;
 		#size-cells = <0>;
-		/* Nuclei variant FIFO depth — see qspi0 comment */
+		/* Nuclei variant FIFO depth - see qspi0 comment */
 		sifive,fifo-depth = <4>;
 		status = "okay";
-  
+
 		spi-nand@1 {
 			compatible = "spi-nand";
 			reg = <1>;
@@ -232,100 +241,113 @@
 				#size-cells = <1>;
 
 				partition@0 {
-					reg = <0x00000000 0x00800000>;
+					reg = <0x00000000 0x00c00000>;
 					label = "kernel_nand";
 				};
 
-				partition@800000 {
-					reg = <0x00800000 0x07800000>;
+				partition@c00000 {
+					reg = <0x00c00000 0x07400000>;
 					label = "ubifs_nand";
 				};
 			};
 		};
 	};
-  
-	mac: ethernet@67800000 {
-		compatible = "fsl,fsl-mac";
-		reg = <0x0 0x67800000 0x0 0x1000>;
-		interrupt-parent = <&plic0>;
-		interrupts = <10>,<11>,<12>;
-		clocks = <&hfclk>;
-		num-cs = <1>;
-		#address-cells = <1>;
-		#size-cells = <0>;
+
+	switch0: switch@60000000 {
+		compatible = "milkv,vega-fsl91030m-switch";
+		reg = <0x0 0x60000000 0x0 0x07100000>,
+		      <0x0 0x10017000 0x0 0x1000>,
+		      <0x0 0x40010000 0x0 0x1000>;
+		reg-names = "switch", "dma", "dma-scratch";
 		status = "okay";
-	};	
+	};
+
+	packet_dma0: packet-dma@67800000 {
+		compatible = "milkv,vega-xy1000-pdma";
+		reg = <0x0 0x67800000 0x0 0x1000>,
+		      <0x0 0x40000000 0x0 0x8000>;
+		reg-names = "regs", "buffer";
+		interrupt-parent = <&plic0>;
+		interrupts = <10>, <11>, <12>;
+		interrupt-names = "tx-end", "rx-end", "rx-req";
+		local-mac-address = [00 02 a3 f2 10 00];
+		status = "okay";
+	};
 
 	gpio: gpio@10011000 {
 		compatible = "sifive,gpio0";
 		interrupt-parent = <&plic0>;
-		interrupts = <1>;
+		interrupts = <1>, <13>, <14>, <15>, <16>, <17>, <18>, <19>,
+			     <20>, <21>, <22>, <23>, <24>, <25>, <26>, <27>,
+			     <28>, <29>, <30>, <31>, <32>, <33>, <34>, <35>,
+			     <36>, <37>, <38>, <39>, <40>, <41>, <42>, <43>;
 		reg = <0x0 0x10011000 0x0 0x1000>;
 		gpio-controller;
 		#gpio-cells = <2>;
 		interrupt-controller;
 		#interrupt-cells = <2>;
 		clocks = <&hfclk>;
+		ngpios = <32>;
 		status = "okay";
 	};
 
 	i2c0: ocores@10018000 {
 		compatible = "opencores,i2c-ocores";
 		#address-cells = <1>;
-		#size-cells = <0>;     
+		#size-cells = <0>;
 		interrupt-parent = <&plic0>;
 		interrupts = <4>;
 		reg = <0x0 0x10018000 0x0 0x1000>;
-		clock-frequency = <25000000>;
-	}; 
+		opencores,ip-clock-frequency = <25000000>;
+		clock-frequency = <100000>;
+	};
 
-  	wdt: watchdog@68000000 {
+	wdt: watchdog@68000000 {
 		compatible = "riscv,fsl-wdt";
 		reg = <0x0 0x68000000 0x0 0x20>;
 		interrupt-parent = <&plic0>;
 		interrupts = <8>;
 		clocks = <&hfclk>;
 		status = "okay";
-	};		
+	};
 
-	/* TODO Vega: confirm exact GPIO numbers via `cat /sys/module/led_164/parameters/*`
-	 * on vendor 5.8 kernel. */
-	
-	/* Bit-banged SPI bus to drive the 74HC164 shift register chain */
 	led_spi: spi {
 		compatible = "spi-gpio";
 		#address-cells = <1>;
 		#size-cells = <0>;
-		sck-gpios = <&gpio 0 0>;	/* TODO: gpio_clk */
-		mosi-gpios = <&gpio 1 0>;	/* TODO: gpio_data */
-		cs-gpios = <&gpio 2 0>;		/* TODO: gpio_rst (active-low chip clear) */
+		sck-gpios = <&gpio 12 0>;
+		mosi-gpios = <&gpio 14 0>;
+		cs-gpios = <&gpio 31 1>;
 		num-chipselects = <1>;
-	
+
 		led_sr: gpio-controller@0 {
-			compatible = "fairchild,74hc595";  /* 74HC164 is shift-only, but 74HC595 driver
-			                                     also works */
+			compatible = "fairchild,74hc595";
 			reg = <0>;
 			spi-max-frequency = <100000>;
-			registers-number = <2>;  /* TODO: number of cascaded chips */
+			registers-number = <4>;
 			gpio-controller;
 			#gpio-cells = <2>;
 		};
 	};
-	
+
 	leds {
 		compatible = "gpio-leds";
-		
-		led-port0   { label = "vega:port0";   gpios = <&led_sr 0 0>; };
-		led-port1   { label = "vega:port1";   gpios = <&led_sr 1 0>; };
-		led-port2   { label = "vega:port2";   gpios = <&led_sr 2 0>; };
-		led-port3   { label = "vega:port3";   gpios = <&led_sr 3 0>; };
-		led-port4   { label = "vega:port4";   gpios = <&led_sr 4 0>; };
-		led-system  { label = "vega:system";  gpios = <&led_sr 5 0>; };
-	};
-	
-	preventloop-gpio {
-		compatible = "fixed-gpio-control";  /* TODO: stub — drive at boot */
-		gpios = <&gpio 16 0>;	/* TODO: gpio_preventloop */
-	};
 
+		led-g12-act { label = "vega:g12:act"; gpios = <&led_sr 0 1>; };
+		led-g12-link { label = "vega:g12:link"; gpios = <&led_sr 1 1>; };
+		led-g11-act { label = "vega:g11:act"; gpios = <&led_sr 2 1>; };
+		led-g11-link { label = "vega:g11:link"; gpios = <&led_sr 3 1>; };
+		led-g10-act { label = "vega:g10:act"; gpios = <&led_sr 4 1>; };
+		led-g10-link { label = "vega:g10:link"; gpios = <&led_sr 5 1>; };
+		led-g9-act { label = "vega:g9:act"; gpios = <&led_sr 6 1>; };
+		led-g9-link { label = "vega:g9:link"; gpios = <&led_sr 7 1>; };
+		led-g8-act { label = "vega:g8:act"; gpios = <&led_sr 8 1>; };
+		led-g8-link { label = "vega:g8:link"; gpios = <&led_sr 9 1>; };
+		led-g7-act { label = "vega:g7:act"; gpios = <&led_sr 10 1>; };
+		led-g7-link { label = "vega:g7:link"; gpios = <&led_sr 11 1>; };
+		led-g6-act { label = "vega:g6:act"; gpios = <&led_sr 12 1>; };
+		led-g6-link { label = "vega:g6:link"; gpios = <&led_sr 13 1>; };
+		led-g5-act { label = "vega:g5:act"; gpios = <&led_sr 14 1>; };
+		led-g5-link { label = "vega:g5:link"; gpios = <&led_sr 15 1>; };
+	};
 };

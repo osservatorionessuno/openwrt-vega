@@ -43,6 +43,6 @@ honour ASIDs in matching. See `ASID_BUG.md`. The
 0x10018000–0x10018FFF  ocores I2C
 0x40000000–0x4FFFFFFF  DDR3 (256 MiB)
 0x41000000–0x4105FFFF  reserved for OpenSBI
-0x67800000–0x67800FFF  Fisilink MAC (xy1000 driver target)
+0x67800000–0x67800FFF  Fisilink MAC aperture (legacy xy1000 research target)
 0x68000000–0x6800001F  FSL watchdog
 ```

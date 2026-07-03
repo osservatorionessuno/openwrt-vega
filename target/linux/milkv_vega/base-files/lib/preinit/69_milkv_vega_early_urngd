@@ -1,0 +1,52 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# The Vega board has no verified bootloader RNG seed and no hardware RNG, and
+# it accrues interrupt entropy very slowly. procd/ubusd then blocks in
+# getrandom() at "procd: - ubus -" before the network is up. Run OpenWrt's
+# jitter RNG (urngd) once during preinit to unblock init; the rc.d urngd
+# service owns the supervised daemon afterwards.
+#
+# This MUST be numbered below 70: 70_initramfs_test does a `break` out of the
+# preinit_main hook loop when $INITRAMFS is set, so any hook numbered >70 never
+# runs in the RAM-root initramfs (the recovery image used for in-system
+# reflash). At 69 it runs in both the normal boot and the initramfs.
+#
+# Gate on the CRNG actually being initialised, not on entropy_avail>=256:
+# entropy_avail tracks the input pool and can cross 256 a beat before the CRNG
+# reseeds and marks itself ready. A read from /dev/random unblocks at exactly
+# the moment getrandom() would, so keep urngd feeding until that read returns.
+
+milkv_vega_seed_early_urngd() {
+	local pid reader i
+
+	[ -x /sbin/urngd ] || return
+	[ -c /dev/random ] || return
+	pidof urngd >/dev/null 2>&1 && return
+
+	echo "early-urngd: seeding CRNG (entropy=$(cat /proc/sys/kernel/random/entropy_avail 2>/dev/null))" > /dev/kmsg 2>/dev/null
+
+	/sbin/urngd &
+	pid="$!"
+
+	# Block until the CRNG is ready. Bounded by a shell watchdog because
+	# busybox has no timeout(1), so a wedged RNG slows preinit but can't hang
+	# it forever.
+	dd if=/dev/random of=/dev/null bs=32 count=1 2>/dev/null &
+	reader="$!"
+	i=0
+	while [ "$i" -lt 30 ]; do
+		kill -0 "$reader" 2>/dev/null || break
+		sleep 1
+		i=$((i + 1))
+	done
+	kill "$reader" 2>/dev/null || true
+	wait "$reader" 2>/dev/null || true
+
+	kill "$pid" 2>/dev/null || true
+	wait "$pid" 2>/dev/null || true
+
+	echo "early-urngd: CRNG ready after ${i}s (entropy=$(cat /proc/sys/kernel/random/entropy_avail 2>/dev/null))" > /dev/kmsg 2>/dev/null
+}
+
+boot_hook_add preinit_main milkv_vega_seed_early_urngd
